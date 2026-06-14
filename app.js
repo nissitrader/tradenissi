@@ -46,11 +46,13 @@ const state = {
   replay: {
     active: false,
     playing: false,
+    loading: false,
     speed: 1,
     date: "",
     timeframe: "15",
     candles: [],
     index: 40,
+    source: "",
     timer: null,
     journal: [],
     loggedKeys: new Set(),
@@ -322,19 +324,32 @@ async function loadApiSignals() {
 }
 
 async function loadApiReplayCandles() {
-  const data = await tsrDataRequest("replay", {
-    params: {
-      symbol: "XAUUSD",
-      timeframe: getReplayTimeframeLabel(state.replay.timeframe),
-      date: state.replay.date,
-      limit: "2000",
-    },
-  });
-  if (!data.ok) {
-    setApiUnavailable(data.message);
-    return [];
+  const params = {
+    symbol: "XAUUSD",
+    timeframe: getReplayTimeframeLabel(state.replay.timeframe),
+    date: state.replay.date,
+    limit: "2000",
+  };
+  const replayData = await tsrDataRequest("replay", { params });
+  if (replayData.ok) {
+    const candles = normalizeApiCandles(extractCandles(replayData.data));
+    if (candles.length) return { candles, source: "TSR Data API Replay" };
+  } else {
+    setApiUnavailable(replayData.message);
+    return { candles: [], source: "unavailable", message: replayData.message, unavailable: true };
   }
-  return normalizeApiCandles(data.data.candles || []);
+
+  const historyData = await tsrDataRequest("history", { params });
+  if (historyData.ok) {
+    const candles = normalizeApiCandles(extractCandles(historyData.data));
+    if (candles.length) return { candles, source: "TSR Data API History" };
+  }
+
+  return {
+    candles: generateReplayCandles(state.replay.date, state.replay.timeframe),
+    source: "Replay d'entraînement local",
+    message: `Aucune bougie TSR Data API pour ${state.replay.date} ${params.timeframe}. Replay d'entraînement local activé.`,
+  };
 }
 
 async function postApiLog(payload) {
@@ -384,6 +399,16 @@ function setApiUnavailable(message) {
   state.api.message = message || API_UNAVAILABLE_MESSAGE;
   elements.apiNotice.textContent = state.api.message;
   elements.apiNotice.hidden = false;
+}
+
+function extractCandles(payload) {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload.candles)) return payload.candles;
+  if (Array.isArray(payload.history)) return payload.history;
+  if (Array.isArray(payload.data)) return payload.data;
+  if (payload.data && Array.isArray(payload.data.candles)) return payload.data.candles;
+  return [];
 }
 
 function renderApiSignals() {
@@ -437,10 +462,20 @@ function toggleReplayMode() {
 async function resetReplaySession() {
   state.replay.date = elements.replayDate.value || state.replay.date;
   state.replay.timeframe = elements.replayTimeframe.value;
-  const apiCandles = await loadApiReplayCandles();
-  state.replay.candles = apiCandles.length ? apiCandles : [];
+  state.replay.loading = true;
+  state.replay.playing = false;
+  elements.replayPlay.textContent = "Play";
+  clearStrategyOverlay();
+  drawReplayMessage("Chargement des bougies replay TSR Data API...");
+  elements.replayStatus.textContent = "Chargement replay...";
+  const replayData = await loadApiReplayCandles();
+  state.replay.loading = false;
+  state.replay.source = replayData.source || "";
+  state.replay.candles = replayData.candles || [];
   if (!state.replay.candles.length) {
-    elements.replayStatus.textContent = state.api.message || API_UNAVAILABLE_MESSAGE;
+    const message = replayData.message || state.api.message || API_UNAVAILABLE_MESSAGE;
+    elements.replayStatus.textContent = message;
+    drawReplayMessage(message);
     renderReplayJournal();
     return;
   }
@@ -456,6 +491,14 @@ async function resetReplaySession() {
 function toggleReplayPlayback() {
   if (!state.replay.active) {
     toggleReplayMode();
+  }
+  if (state.replay.loading) {
+    elements.replayStatus.textContent = "Chargement replay...";
+    return;
+  }
+  if (!state.replay.candles.length) {
+    resetReplaySession();
+    return;
   }
   state.replay.playing = !state.replay.playing;
   elements.replayPlay.textContent = state.replay.playing ? "Pause" : "Play";
@@ -481,7 +524,12 @@ function stepReplay(delta) {
     toggleReplayMode();
     return;
   }
-  const nextIndex = clamp(state.replay.index + delta, 10, state.replay.candles.length - 1);
+  if (state.replay.loading) return;
+  if (!state.replay.candles.length) {
+    resetReplaySession();
+    return;
+  }
+  const nextIndex = clamp(state.replay.index + delta, Math.min(10, state.replay.candles.length - 1), state.replay.candles.length - 1);
   state.replay.index = nextIndex;
   if (nextIndex === state.replay.candles.length - 1 && state.replay.playing) {
     state.replay.playing = false;
@@ -493,7 +541,10 @@ function stepReplay(delta) {
 
 function evaluateReplayAndRender() {
   if (!state.replay.candles.length) {
-    elements.replayStatus.textContent = state.api.message || API_UNAVAILABLE_MESSAGE;
+    const message = state.api.message || API_UNAVAILABLE_MESSAGE;
+    elements.replayStatus.textContent = message;
+    clearStrategyOverlay();
+    drawReplayMessage(message);
     return;
   }
 
@@ -531,12 +582,12 @@ function evaluateReplayAndRender() {
   elements.h1Direction.textContent = goldResult.h1Direction;
   elements.m15Direction.textContent = goldResult.m15Direction;
   elements.confirmationSummary.textContent = activeResult.confirmationSummary;
-  elements.replayStatus.textContent = `${formatReplayTime(context.last.time)} · ${state.replay.index + 1}/${state.replay.candles.length} · ${getReplayTimeframeLabel(state.replay.timeframe)}`;
+  elements.replayStatus.textContent = `${formatReplayTime(context.last.time)} · ${state.replay.index + 1}/${state.replay.candles.length} · ${getReplayTimeframeLabel(state.replay.timeframe)} · ${state.replay.source}`;
 
   renderBlocks(activeResult.blocks);
   renderComparison(smartResult, goldResult);
   renderScenarios(context.market, context.zones, context.confirmation, context.session);
-  renderStrategyOverlay(activeResult.direction, context.zones, context.confirmation);
+  clearStrategyOverlay();
   renderRsiPanel(rsi);
   drawReplayChart(visibleCandles, context, activeResult);
   updateReplayJournal(activeResult, context, visibleCandles);
@@ -626,6 +677,7 @@ function generateReplayCandles(date, timeframe) {
       high,
       low,
       close,
+      volume: Math.round(700 + random() * 2600),
     });
     price = close;
   }
@@ -636,6 +688,10 @@ function generateReplayCandles(date, timeframe) {
 function drawReplayChart(candles, context, activeResult) {
   const canvas = elements.replayCanvas;
   const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height || !candles.length) {
+    drawReplayMessage("Aucune bougie replay disponible.");
+    return;
+  }
   const ratio = window.devicePixelRatio || 1;
   canvas.width = Math.max(1, Math.floor(rect.width * ratio));
   canvas.height = Math.max(1, Math.floor(rect.height * ratio));
@@ -651,7 +707,8 @@ function drawReplayChart(candles, context, activeResult) {
   const padding = Math.max(2, (high - low) * 0.12);
   const max = high + padding;
   const min = low - padding;
-  const priceToY = (price) => ((max - price) / (max - min)) * (rect.height - 36) + 18;
+  const priceRange = Math.max(0.0001, max - min);
+  const priceToY = (price) => ((max - price) / priceRange) * (rect.height - 36) + 18;
   const candleWidth = Math.max(4, (rect.width - 58) / visible.length);
 
   drawReplayGrid(ctx, rect);
@@ -675,6 +732,26 @@ function drawReplayChart(candles, context, activeResult) {
   });
 
   drawReplayOverlays(ctx, rect, context, activeResult, priceToY);
+}
+
+function drawReplayMessage(message) {
+  const canvas = elements.replayCanvas;
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.floor(rect.width || canvas.clientWidth || 900));
+  const height = Math.max(1, Math.floor(rect.height || canvas.clientHeight || 520));
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(width * ratio);
+  canvas.height = Math.floor(height * ratio);
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.fillStyle = "#090a08";
+  ctx.fillRect(0, 0, width, height);
+  drawReplayGrid(ctx, { width, height });
+  ctx.fillStyle = "#dcd6c8";
+  ctx.font = "700 14px ui-sans-serif, system-ui";
+  ctx.textAlign = "center";
+  ctx.fillText(message, width / 2, height / 2);
+  ctx.textAlign = "left";
 }
 
 function drawReplayGrid(ctx, rect) {
@@ -1434,6 +1511,10 @@ function renderStrategyOverlay(direction, zones, confirmation) {
   elements.strategyOverlay.innerHTML = items
     .map((item) => `<span class="overlay-item ${item.className}" style="${item.style}">${item.label}</span>`)
     .join("");
+}
+
+function clearStrategyOverlay() {
+  elements.strategyOverlay.innerHTML = "";
 }
 
 function renderRsiPanel(rsi) {

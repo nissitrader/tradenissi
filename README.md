@@ -33,6 +33,8 @@ TSR_DATA_API_KEY=votre-cle-locale
 
 Les donnees lourdes ne sont pas stockees sur Vercel : historique, replay, signaux et logs passent par TSR Data API.
 
+Si `/replay` et `/history` repondent correctement mais sans bougies pour la date choisie, l'interface active un replay d'entrainement local afin de garder les controles utilisables. Quand l'API est indisponible, le replay affiche le message de blocage demande et ne masque pas l'erreur.
+
 ## Ce que contient la V1
 
 - Graphique TradingView `OANDA:XAUUSD` visible au centre.
