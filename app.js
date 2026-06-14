@@ -34,12 +34,34 @@ const state = {
   widget: null,
   lastNewsLoad: null,
   newsEvents: [],
+  replay: {
+    active: false,
+    playing: false,
+    speed: 1,
+    date: "",
+    timeframe: "15",
+    candles: [],
+    index: 40,
+    timer: null,
+    journal: [],
+    loggedKeys: new Set(),
+  },
 };
 
 const elements = {
   workspace: document.getElementById("workspace"),
+  chartFrame: document.getElementById("chartFrame"),
   overlayControls: document.getElementById("overlayControls"),
   strategyOverlay: document.getElementById("strategyOverlay"),
+  replayCanvas: document.getElementById("replayCanvas"),
+  toggleReplay: document.getElementById("toggleReplay"),
+  replayDate: document.getElementById("replayDate"),
+  replayTimeframe: document.getElementById("replayTimeframe"),
+  replayBack: document.getElementById("replayBack"),
+  replayPlay: document.getElementById("replayPlay"),
+  replayNext: document.getElementById("replayNext"),
+  replaySpeed: document.getElementById("replaySpeed"),
+  replayStatus: document.getElementById("replayStatus"),
   rsiPanel: document.getElementById("rsiPanel"),
   rsiValue: document.getElementById("rsiValue"),
   rsiLine: document.getElementById("rsiLine"),
@@ -70,9 +92,11 @@ const elements = {
   m15Direction: document.getElementById("m15Direction"),
   confirmationSummary: document.getElementById("confirmationSummary"),
   scenarioList: document.getElementById("scenarioList"),
+  replayJournal: document.getElementById("replayJournal"),
 };
 
 function boot() {
+  initReplayDefaults();
   renderOverlayControls();
   bindInteractions();
   renderTradingView();
@@ -182,6 +206,23 @@ function bindInteractions() {
     evaluateAndRender();
   });
 
+  elements.toggleReplay.addEventListener("click", toggleReplayMode);
+  elements.replayDate.addEventListener("change", resetReplaySession);
+  elements.replayTimeframe.addEventListener("change", () => {
+    state.replay.timeframe = elements.replayTimeframe.value;
+    state.interval = state.replay.timeframe;
+    state.intervalLabel = getReplayTimeframeLabel(state.replay.timeframe);
+    elements.chartInterval.textContent = state.intervalLabel;
+    resetReplaySession();
+  });
+  elements.replayBack.addEventListener("click", () => stepReplay(-1));
+  elements.replayNext.addEventListener("click", () => stepReplay(1));
+  elements.replayPlay.addEventListener("click", toggleReplayPlayback);
+  elements.replaySpeed.addEventListener("change", () => {
+    state.replay.speed = Number(elements.replaySpeed.value);
+    restartReplayTimer();
+  });
+
   document.querySelectorAll("[data-smart-overlay]").forEach((input) => {
     input.addEventListener("change", () => {
       state.smartMoneyVisibility[input.dataset.smartOverlay] = input.checked;
@@ -228,6 +269,503 @@ function applyLayout(layout) {
   }
 }
 
+function initReplayDefaults() {
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const date = yesterday.toISOString().slice(0, 10);
+  state.replay.date = date;
+  elements.replayDate.value = date;
+  elements.replayTimeframe.value = state.replay.timeframe;
+  renderReplayJournal();
+}
+
+function toggleReplayMode() {
+  state.replay.active = !state.replay.active;
+  state.replay.playing = false;
+  stopReplayTimer();
+  elements.chartFrame.classList.toggle("replay-active", state.replay.active);
+  document.querySelector(".replay-controls").classList.toggle("active", state.replay.active);
+  elements.toggleReplay.textContent = state.replay.active ? "Désactiver" : "Activer";
+  elements.replayPlay.textContent = "Play";
+
+  if (state.replay.active) {
+    resetReplaySession();
+  } else {
+    elements.replayStatus.textContent = "Replay désactivé";
+    renderTradingView();
+    evaluateAndRender();
+  }
+}
+
+function resetReplaySession() {
+  state.replay.date = elements.replayDate.value || state.replay.date;
+  state.replay.timeframe = elements.replayTimeframe.value;
+  state.replay.candles = generateReplayCandles(state.replay.date, state.replay.timeframe);
+  state.replay.index = Math.min(40, state.replay.candles.length - 1);
+  state.replay.journal = [];
+  state.replay.loggedKeys = new Set();
+  renderReplayJournal();
+  if (state.replay.active) {
+    evaluateReplayAndRender();
+  }
+}
+
+function toggleReplayPlayback() {
+  if (!state.replay.active) {
+    toggleReplayMode();
+  }
+  state.replay.playing = !state.replay.playing;
+  elements.replayPlay.textContent = state.replay.playing ? "Pause" : "Play";
+  restartReplayTimer();
+}
+
+function restartReplayTimer() {
+  stopReplayTimer();
+  if (!state.replay.active || !state.replay.playing) return;
+  const delay = Math.max(90, 900 / state.replay.speed);
+  state.replay.timer = window.setInterval(() => stepReplay(1), delay);
+}
+
+function stopReplayTimer() {
+  if (state.replay.timer) {
+    window.clearInterval(state.replay.timer);
+    state.replay.timer = null;
+  }
+}
+
+function stepReplay(delta) {
+  if (!state.replay.active) {
+    toggleReplayMode();
+    return;
+  }
+  const nextIndex = clamp(state.replay.index + delta, 10, state.replay.candles.length - 1);
+  state.replay.index = nextIndex;
+  if (nextIndex === state.replay.candles.length - 1 && state.replay.playing) {
+    state.replay.playing = false;
+    elements.replayPlay.textContent = "Play";
+    stopReplayTimer();
+  }
+  evaluateReplayAndRender();
+}
+
+function evaluateReplayAndRender() {
+  const visibleCandles = state.replay.candles.slice(0, state.replay.index + 1);
+  const context = buildReplayContext(visibleCandles);
+  state.tick = state.replay.index;
+  state.basePrice = context.last.close;
+
+  const smartResult = buildSmartMoneyAnalysis(context.session, context.market, context.news, context.zones, context.confirmation);
+  const goldResult = buildGoldIntelligenceAnalysis(smartResult, context.market, context.news, context.zones, context.confirmation, context.session);
+  const activeResult = state.analysisMode === "gold" ? goldResult : smartResult;
+  const rsi = getReplayRsi(visibleCandles, activeResult.direction);
+
+  elements.sessionName.textContent = `${context.session.name} Replay`;
+  elements.marketBias.textContent = activeResult.biasLabel;
+  elements.scoreTop.textContent = activeResult.score;
+  elements.setupState.textContent = activeResult.setupState;
+  elements.activeModeLabel.textContent = `${activeResult.name} · Replay`;
+  elements.tradeDirection.textContent = activeResult.status;
+  elements.tradeDirection.style.color = getStatusColor(activeResult.status);
+  elements.signalReason.textContent = activeResult.reason;
+  elements.badgeRow.innerHTML = activeResult.badges.map(renderBadge).join("");
+  elements.scoreFill.style.width = `${activeResult.score}%`;
+  elements.scoreValue.textContent = `${activeResult.score} / 100`;
+  elements.entryPrice.textContent = activeResult.setup.entry;
+  elements.stopLoss.textContent = activeResult.setup.sl;
+  elements.tp1.textContent = activeResult.setup.tp1;
+  elements.tp2.textContent = activeResult.setup.tp2;
+  elements.tp3.textContent = activeResult.setup.tp3;
+  elements.confirmTf.textContent = activeResult.timeframe;
+  elements.usedZone.textContent = activeResult.zone;
+  elements.targetLiquidity.textContent = activeResult.liquidity;
+  elements.newsRisk.textContent = "Replay: news ignorées";
+  elements.blockingReason.textContent = activeResult.blockingReason;
+  elements.h1Direction.textContent = goldResult.h1Direction;
+  elements.m15Direction.textContent = goldResult.m15Direction;
+  elements.confirmationSummary.textContent = activeResult.confirmationSummary;
+  elements.replayStatus.textContent = `${formatReplayTime(context.last.time)} · ${state.replay.index + 1}/${state.replay.candles.length} · ${getReplayTimeframeLabel(state.replay.timeframe)}`;
+
+  renderBlocks(activeResult.blocks);
+  renderComparison(smartResult, goldResult);
+  renderScenarios(context.market, context.zones, context.confirmation, context.session);
+  renderStrategyOverlay(activeResult.direction, context.zones, context.confirmation);
+  renderRsiPanel(rsi);
+  drawReplayChart(visibleCandles, context, activeResult);
+  updateReplayJournal(activeResult, context, visibleCandles);
+}
+
+function buildReplayContext(candles) {
+  const first = candles[0];
+  const last = candles[candles.length - 1];
+  const lookback = candles.slice(-24);
+  const previous = candles.slice(-25, -1);
+  const previousHigh = previous.length ? Math.max(...previous.map((candle) => candle.high)) : last.high;
+  const previousLow = previous.length ? Math.min(...previous.map((candle) => candle.low)) : last.low;
+  const high = Math.max(...lookback.map((candle) => candle.high));
+  const low = Math.min(...lookback.map((candle) => candle.low));
+  const range = Math.max(0.1, high - low);
+  const move = last.close - first.open;
+  const trendStrength = Math.abs(move) / range;
+  const isRange = trendStrength < 0.32;
+  const bias = isRange ? "WAIT" : move > 0 ? "BUY" : "SELL";
+  const liquidityTaken = last.high > previousHigh || last.low < previousLow;
+  const bullishReaction = last.close > last.open && last.close > candles[Math.max(0, candles.length - 2)].close;
+  const bearishReaction = last.close < last.open && last.close < candles[Math.max(0, candles.length - 2)].close;
+  const choch = bias === "BUY" ? last.close > previousHigh - range * 0.08 : bias === "SELL" ? last.close < previousLow + range * 0.08 : false;
+  const confirmationValid = bias === "BUY" ? bullishReaction && choch : bias === "SELL" ? bearishReaction && choch : false;
+  const session = getSessionFromTime(last.time);
+  const zoneLabel = bias === "SELL" ? "Replay H1 bearish order block + EQH" : "Replay M15 bullish order block + FVG";
+
+  return {
+    first,
+    last,
+    session,
+    market: {
+      valid: bias !== "WAIT" && !isRange,
+      bias,
+      action: bias === "BUY" ? "BUY privilégié" : bias === "SELL" ? "SELL privilégié" : "Attendre",
+      context: isRange ? "range dangereux" : bias === "BUY" ? "tendance haussière en replay" : "tendance baissière en replay",
+      score: isRange ? 28 : clamp(Math.round(42 + trendStrength * 34), 38, 78),
+    },
+    news: {
+      valid: true,
+      score: 16,
+      label: "Replay: news ignorées",
+      reason: "Risque news non appliqué au replay",
+    },
+    zones: {
+      valid: bias !== "WAIT" && candles.length >= 20,
+      primary: zoneLabel,
+      targetLiquidity: bias === "SELL" ? "Previous Low / Session Low" : "Previous High / Session High",
+      liquidityTaken,
+      reason: liquidityTaken ? "Liquidité prise dans les bougies visibles" : "Liquidité ciblée, non prise",
+    },
+    confirmation: {
+      valid: bias !== "WAIT" && confirmationValid,
+      timeframe: getReplayTimeframeLabel(state.replay.timeframe),
+      reason: confirmationValid ? "ChoCH/BOS confirmé sur bougie visible" : "Setup incomplet — attente confirmation",
+      choch,
+      candleClose: true,
+    },
+    high,
+    low,
+    previousHigh,
+    previousLow,
+  };
+}
+
+function generateReplayCandles(date, timeframe) {
+  const seed = hashString(`${date}-${timeframe}-XAUUSD`);
+  const random = seededRandom(seed);
+  const minutes = timeframe === "30S" ? 0.5 : Number(timeframe);
+  const start = new Date(`${date}T00:00:00Z`).getTime();
+  const candles = [];
+  let price = 2320 + (seed % 80);
+
+  for (let index = 0; index < 220; index += 1) {
+    const trend = Math.sin(index / 28 + (seed % 11)) * 0.9;
+    const impulse = Math.cos(index / 9 + (seed % 5)) * 0.45;
+    const noise = (random() - 0.5) * 1.9;
+    const open = price;
+    const close = Math.max(1700, open + trend + impulse + noise);
+    const wickUp = 0.45 + random() * 1.9;
+    const wickDown = 0.45 + random() * 1.9;
+    const high = Math.max(open, close) + wickUp;
+    const low = Math.min(open, close) - wickDown;
+    candles.push({
+      time: new Date(start + index * minutes * 60 * 1000),
+      open,
+      high,
+      low,
+      close,
+    });
+    price = close;
+  }
+
+  return candles;
+}
+
+function drawReplayChart(candles, context, activeResult) {
+  const canvas = elements.replayCanvas;
+  const rect = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.floor(rect.width * ratio));
+  canvas.height = Math.max(1, Math.floor(rect.height * ratio));
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, rect.width, rect.height);
+  ctx.fillStyle = "#090a08";
+  ctx.fillRect(0, 0, rect.width, rect.height);
+
+  const visible = candles.slice(-72);
+  const high = Math.max(...visible.map((candle) => candle.high));
+  const low = Math.min(...visible.map((candle) => candle.low));
+  const padding = Math.max(2, (high - low) * 0.12);
+  const max = high + padding;
+  const min = low - padding;
+  const priceToY = (price) => ((max - price) / (max - min)) * (rect.height - 36) + 18;
+  const candleWidth = Math.max(4, (rect.width - 58) / visible.length);
+
+  drawReplayGrid(ctx, rect);
+  visible.forEach((candle, index) => {
+    const x = 14 + index * candleWidth + candleWidth / 2;
+    const openY = priceToY(candle.open);
+    const closeY = priceToY(candle.close);
+    const highY = priceToY(candle.high);
+    const lowY = priceToY(candle.low);
+    const bullish = candle.close >= candle.open;
+    ctx.strokeStyle = bullish ? "#46d17b" : "#ef6262";
+    ctx.fillStyle = bullish ? "rgba(70, 209, 123, 0.72)" : "rgba(239, 98, 98, 0.72)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, highY);
+    ctx.lineTo(x, lowY);
+    ctx.stroke();
+    const bodyTop = Math.min(openY, closeY);
+    const bodyHeight = Math.max(2, Math.abs(openY - closeY));
+    ctx.fillRect(x - candleWidth * 0.28, bodyTop, candleWidth * 0.56, bodyHeight);
+  });
+
+  drawReplayOverlays(ctx, rect, context, activeResult, priceToY);
+}
+
+function drawReplayGrid(ctx, rect) {
+  ctx.strokeStyle = "rgba(238, 232, 207, 0.08)";
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 5; i += 1) {
+    const y = (rect.height / 5) * i;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(rect.width, y);
+    ctx.stroke();
+  }
+}
+
+function drawReplayOverlays(ctx, rect, context, activeResult, priceToY) {
+  const visible = state.smartMoneyVisibility;
+  const highY = priceToY(context.previousHigh);
+  const lowY = priceToY(context.previousLow);
+
+  if (visible.orderBlocks) {
+    ctx.fillStyle = "rgba(231, 184, 78, 0.14)";
+    ctx.strokeStyle = "rgba(231, 184, 78, 0.72)";
+    ctx.strokeRect(rect.width * 0.56, priceToY(context.last.close + 3), rect.width * 0.22, 42);
+    ctx.fillRect(rect.width * 0.56, priceToY(context.last.close + 3), rect.width * 0.22, 42);
+  }
+  if (visible.fvg) {
+    ctx.fillStyle = "rgba(59, 216, 189, 0.12)";
+    ctx.fillRect(rect.width * 0.34, priceToY(context.last.close + 1.8), rect.width * 0.16, 34);
+  }
+  if (visible.equalHigh || visible.previousHL) drawReplayLine(ctx, highY, "#74a7ff", "Previous High / EQH", rect);
+  if (visible.equalLow || visible.previousHL) drawReplayLine(ctx, lowY, "#74a7ff", "Previous Low / EQL", rect);
+  if (visible.liquiditySweep && context.zones.liquidityTaken) drawReplayLabel(ctx, rect.width * 0.72, highY - 18, "Sweep", "#74a7ff");
+  if (visible.bos && context.confirmation.choch) drawReplayLabel(ctx, rect.width * 0.48, rect.height * 0.37, "BOS", "#46d17b");
+  if (visible.choch && context.confirmation.choch) drawReplayLabel(ctx, rect.width * 0.6, rect.height * 0.52, "ChoCH", "#e7b84e");
+  if (visible.trendlines) {
+    ctx.strokeStyle = "rgba(116, 167, 255, 0.75)";
+    ctx.beginPath();
+    ctx.moveTo(rect.width * 0.18, rect.height * 0.68);
+    ctx.lineTo(rect.width * 0.76, rect.height * 0.48);
+    ctx.stroke();
+  }
+  if (visible.entryZones && activeResult.status !== "ATTENTE" && activeResult.status !== "SIGNAL REFUSÉ") {
+    const entry = parsePrice(activeResult.setup.entry);
+    const sl = parsePrice(activeResult.setup.sl);
+    const tp1 = parsePrice(activeResult.setup.tp1);
+    drawReplayLine(ctx, priceToY(entry), "#e7b84e", "Entrée", rect);
+    drawReplayLine(ctx, priceToY(sl), "#ef6262", "SL", rect);
+    drawReplayLine(ctx, priceToY(tp1), "#46d17b", "TP1", rect);
+    drawReplayLabel(ctx, rect.width * 0.84, priceToY(entry) - 20, activeResult.status, activeResult.status === "BUY" ? "#46d17b" : "#ef6262");
+  }
+}
+
+function drawReplayLine(ctx, y, color, label, rect) {
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(8, y);
+  ctx.lineTo(rect.width - 10, y);
+  ctx.stroke();
+  ctx.font = "11px ui-monospace, monospace";
+  ctx.fillText(label, 12, y - 5);
+}
+
+function drawReplayLabel(ctx, x, y, label, color) {
+  ctx.fillStyle = "rgba(9, 10, 8, 0.82)";
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  const width = Math.max(48, label.length * 7 + 14);
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, 24, 6);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.font = "700 11px ui-sans-serif, system-ui";
+  ctx.fillText(label, x + 7, y + 16);
+}
+
+function updateReplayJournal(activeResult, context, visibleCandles) {
+  updateOpenReplayResults(visibleCandles);
+  if (activeResult.status !== "BUY" && activeResult.status !== "SELL") {
+    renderReplayJournal();
+    return;
+  }
+
+  const key = `${activeResult.name}-${activeResult.status}-${context.last.time.toISOString()}`;
+  if (state.replay.loggedKeys.has(key)) {
+    renderReplayJournal();
+    return;
+  }
+
+  state.replay.loggedKeys.add(key);
+  state.replay.journal.unshift({
+    key,
+    time: context.last.time,
+    mode: activeResult.name,
+    direction: activeResult.status,
+    entry: activeResult.setup.entry,
+    sl: activeResult.setup.sl,
+    tp: activeResult.setup.tp1,
+    result: "En attente",
+    reason: activeResult.reason,
+  });
+  renderReplayJournal();
+}
+
+function updateOpenReplayResults(visibleCandles) {
+  state.replay.journal.forEach((entry) => {
+    if (entry.result !== "En attente") return;
+    const afterSignal = visibleCandles.filter((candle) => candle.time > entry.time);
+    const sl = parsePrice(entry.sl);
+    const tp = parsePrice(entry.tp);
+    const entryPrice = parsePrice(entry.entry);
+    for (const candle of afterSignal) {
+      if (entry.direction === "BUY") {
+        if (candle.low <= sl) {
+          entry.result = "SL touché";
+          return;
+        }
+        if (candle.high >= tp) {
+          entry.result = "TP touché";
+          return;
+        }
+        if (candle.low <= entryPrice && candle.close > entryPrice) entry.result = "Break-even";
+      }
+      if (entry.direction === "SELL") {
+        if (candle.high >= sl) {
+          entry.result = "SL touché";
+          return;
+        }
+        if (candle.low <= tp) {
+          entry.result = "TP touché";
+          return;
+        }
+        if (candle.high >= entryPrice && candle.close < entryPrice) entry.result = "Break-even";
+      }
+    }
+  });
+}
+
+function renderReplayJournal() {
+  if (!state.replay.journal.length) {
+    elements.replayJournal.innerHTML = '<p class="journal-empty">Aucun signal replay pour le moment.</p>';
+    return;
+  }
+
+  elements.replayJournal.innerHTML = state.replay.journal
+    .slice(0, 12)
+    .map(
+      (entry) => `
+        <article class="journal-row">
+          <strong><span>${formatReplayTime(entry.time)}</span><span>${entry.direction}</span></strong>
+          <span>${entry.mode} · Entrée ${entry.entry} · SL ${entry.sl} · TP ${entry.tp}</span>
+          <span>Résultat: ${entry.result}</span>
+          <small>${entry.reason}</small>
+        </article>
+      `,
+    )
+    .join("");
+}
+
+function getReplayRsi(candles, direction) {
+  const closes = candles.map((candle) => candle.close);
+  const values = [];
+  for (let index = 0; index < closes.length; index += 1) {
+    values.push(calculateRsi(closes.slice(0, index + 1), 14));
+  }
+  const sliced = values.slice(-32);
+  const value = Math.round(sliced[sliced.length - 1] || 50);
+  const previous = Math.round(sliced[sliced.length - 2] || value);
+  const buyValid = direction === "BUY" && ((previous < 35 && value >= 35) || value > 50);
+  const sellValid = direction === "SELL" && ((previous > 65 && value <= 65) || value < 50);
+  return {
+    value,
+    values: sliced.map((item) => Math.round(item)),
+    valid: direction === "WAIT" ? false : buyValid || sellValid,
+    label: buyValid || sellValid ? getRsiLabel(direction) : `RSI 14 neutre (${value})`,
+  };
+}
+
+function calculateRsi(closes, period) {
+  if (closes.length <= period) return 50;
+  const recent = closes.slice(-(period + 1));
+  let gains = 0;
+  let losses = 0;
+  for (let index = 1; index < recent.length; index += 1) {
+    const change = recent[index] - recent[index - 1];
+    if (change >= 0) gains += change;
+    else losses += Math.abs(change);
+  }
+  if (losses === 0) return 100;
+  const rs = gains / losses;
+  return clamp(100 - 100 / (1 + rs), 0, 100);
+}
+
+function getSessionFromTime(time) {
+  const hour = time.getUTCHours();
+  if (hour >= 0 && hour < 7) return { name: "Asie", bias: 1 };
+  if (hour >= 7 && hour < 13) return { name: "Londres", bias: 2 };
+  if (hour >= 13 && hour < 21) return { name: "New York", bias: 2 };
+  return { name: "Transition", bias: 0 };
+}
+
+function getReplayTimeframeLabel(timeframe) {
+  if (timeframe === "240") return "H4";
+  if (timeframe === "60") return "H1";
+  if (timeframe === "30S") return "30s";
+  return `M${timeframe}`;
+}
+
+function formatReplayTime(time) {
+  return time.toLocaleString("fr-FR", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function hashString(value) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function seededRandom(seed) {
+  let value = seed || 1;
+  return () => {
+    value = Math.imul(1664525, value) + 1013904223;
+    return ((value >>> 0) / 4294967296);
+  };
+}
+
+function parsePrice(value) {
+  return Number(String(value).replace(/,/g, ""));
+}
+
 async function loadDailyNews() {
   const todayKey = new Date().toISOString().slice(0, 10);
   const cacheKey = "xauusd-news-cache";
@@ -262,6 +800,11 @@ async function loadDailyNews() {
 }
 
 function evaluateAndRender() {
+  if (state.replay.active) {
+    evaluateReplayAndRender();
+    return;
+  }
+
   state.tick += 1;
   const session = getSession();
   const market = getMarketWeather();

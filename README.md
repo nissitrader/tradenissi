@@ -19,6 +19,8 @@ Ouvrir `index.html` dans un navigateur moderne.
   - TSR Smart Money: analyse rapide et réactive.
   - TSR Gold Intelligence: couche stricte au-dessus du Mode 1 avec H1, OB H1, raffinement M15 et confirmations avancées.
 - Option pour afficher les deux analyses côte à côte.
+- Mode Replay historique avec date, timeframe, Play/Pause, avance/recul bougie, vitesse x1/x2/x5/x10 et journal des signaux.
+- Le replay analyse uniquement les bougies déjà révélées à l'instant rejoué, sans utiliser les bougies futures.
 - Chargement quotidien des news USD critiques via cache local quand le flux public est disponible.
 
 ## Note technique
