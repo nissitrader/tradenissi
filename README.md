@@ -47,6 +47,7 @@ Si `/replay` et `/history` repondent correctement mais sans bougies pour la date
 - Indicateurs classiques activables séparément: EMA 20, EMA 50, EMA 200, VWAP, SuperTrend, Volume et RSI 14 avec niveaux 30/50/70.
 - Tableau de décision avec score 0-100, blocs de validation, raison exacte d'attente et niveaux de setup.
 - Candle Scanner avec analyse corps/meches/volume, detection impulsion/rejet/engulfing/pin bar/displacement, score Candle Quality 0-100 et filtre anti-signaux faibles.
+- Affichage progressif des opportunites: zone future, entree potentielle, entree imminente, signal confirme, avec outil Position longue/courte, SL/TP et ratios risque/rendement.
 - Deux modes d'analyse cliquables:
   - TSR Smart Money: analyse rapide et réactive.
   - TSR Gold Intelligence: couche stricte au-dessus du Mode 1 avec H1, OB H1, raffinement M15 et confirmations avancées.

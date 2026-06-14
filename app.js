@@ -10,6 +10,14 @@ const smartMoneyOverlays = [
   { id: "sessions", label: "Sessions Asie / Londres / New York", defaultOn: true },
   { id: "previousHL", label: "Previous High / Previous Low", defaultOn: true },
   { id: "entryZones", label: "Zones d'entrée potentielles", defaultOn: true },
+  { id: "futureZones", label: "Zones futures potentielles", defaultOn: true },
+  { id: "potentialEntries", label: "Entrées potentielles", defaultOn: true },
+  { id: "imminentEntries", label: "Entrées imminentes", defaultOn: true },
+  { id: "confirmedSignals", label: "Signaux confirmés", defaultOn: true },
+  { id: "longPositionTool", label: "Outil Position longue", defaultOn: true },
+  { id: "shortPositionTool", label: "Outil Position courte", defaultOn: true },
+  { id: "slTp", label: "SL / TP", defaultOn: true },
+  { id: "riskReward", label: "Ratio risque/rendement", defaultOn: true },
 ];
 
 const classicIndicators = [
@@ -563,16 +571,17 @@ function evaluateReplayAndRender() {
   const smartResult = buildSmartMoneyAnalysis(context.session, context.market, context.news, context.zones, context.confirmation, context.candleScan);
   const goldResult = buildGoldIntelligenceAnalysis(smartResult, context.market, context.news, context.zones, context.confirmation, context.session, context.candleScan);
   const activeResult = state.analysisMode === "gold" ? goldResult : smartResult;
+  const entryProjection = buildEntryProjection(activeResult, context.market, context.zones, context.confirmation, context.candleScan, visibleCandles);
   const rsi = getReplayRsi(visibleCandles, activeResult.direction);
 
   elements.sessionName.textContent = `${context.session.name} Replay`;
   elements.marketBias.textContent = activeResult.biasLabel;
   elements.scoreTop.textContent = activeResult.score;
-  elements.setupState.textContent = activeResult.setupState;
+  elements.setupState.textContent = entryProjection.statusLabel;
   elements.activeModeLabel.textContent = `${activeResult.name} · Replay`;
   elements.tradeDirection.textContent = activeResult.status;
   elements.tradeDirection.style.color = getStatusColor(activeResult.status);
-  elements.signalReason.textContent = activeResult.reason;
+  elements.signalReason.textContent = entryProjection.reason;
   elements.badgeRow.innerHTML = activeResult.badges.map(renderBadge).join("");
   elements.scoreFill.style.width = `${activeResult.score}%`;
   elements.scoreValue.textContent = `${activeResult.score} / 100`;
@@ -593,12 +602,12 @@ function evaluateReplayAndRender() {
 
   renderBlocks(activeResult.blocks);
   renderComparison(smartResult, goldResult);
-  renderScenarios(context.market, context.zones, context.confirmation, context.session);
+  renderScenarios(context.market, context.zones, context.confirmation, context.session, entryProjection);
   clearStrategyOverlay();
   renderRsiPanel(rsi);
   renderCandleScanner(context.candleScan);
-  drawReplayChart(visibleCandles, context, activeResult);
-  updateReplayJournal(activeResult, context, visibleCandles);
+  drawReplayChart(visibleCandles, context, activeResult, entryProjection);
+  updateReplayJournal(activeResult, context, visibleCandles, entryProjection);
 }
 
 function buildReplayContext(candles) {
@@ -700,7 +709,7 @@ function generateReplayCandles(date, timeframe) {
   return candles;
 }
 
-function drawReplayChart(candles, context, activeResult) {
+function drawReplayChart(candles, context, activeResult, entryProjection) {
   const canvas = elements.replayCanvas;
   const rect = canvas.getBoundingClientRect();
   if (!rect.width || !rect.height || !candles.length) {
@@ -746,7 +755,7 @@ function drawReplayChart(candles, context, activeResult) {
     ctx.fillRect(x - candleWidth * 0.28, bodyTop, candleWidth * 0.56, bodyHeight);
   });
 
-  drawReplayOverlays(ctx, rect, context, activeResult, priceToY);
+  drawReplayOverlays(ctx, rect, context, activeResult, priceToY, entryProjection);
 }
 
 function drawReplayMessage(message) {
@@ -781,7 +790,7 @@ function drawReplayGrid(ctx, rect) {
   }
 }
 
-function drawReplayOverlays(ctx, rect, context, activeResult, priceToY) {
+function drawReplayOverlays(ctx, rect, context, activeResult, priceToY, entryProjection) {
   const visible = state.smartMoneyVisibility;
   const highY = priceToY(context.previousHigh);
   const lowY = priceToY(context.previousLow);
@@ -808,15 +817,53 @@ function drawReplayOverlays(ctx, rect, context, activeResult, priceToY) {
     ctx.lineTo(rect.width * 0.76, rect.height * 0.48);
     ctx.stroke();
   }
-  if (visible.entryZones && activeResult.status !== "ATTENTE" && activeResult.status !== "SIGNAL REFUSÉ") {
-    const entry = parsePrice(activeResult.setup.entry);
-    const sl = parsePrice(activeResult.setup.sl);
-    const tp1 = parsePrice(activeResult.setup.tp1);
-    drawReplayLine(ctx, priceToY(entry), "#e7b84e", "Entrée", rect);
-    drawReplayLine(ctx, priceToY(sl), "#ef6262", "SL", rect);
-    drawReplayLine(ctx, priceToY(tp1), "#46d17b", "TP1", rect);
-    drawReplayLabel(ctx, rect.width * 0.84, priceToY(entry) - 20, activeResult.status, activeResult.status === "BUY" ? "#46d17b" : "#ef6262");
+  drawReplayEntryProjection(ctx, rect, entryProjection, priceToY);
+}
+
+function drawReplayEntryProjection(ctx, rect, projection, priceToY) {
+  if (!projection || projection.direction === "WAIT") return;
+  const visible = state.smartMoneyVisibility;
+  const isBuy = projection.direction === "BUY";
+  const color = isBuy ? "#46d17b" : "#ef6262";
+  const zoneY = isBuy ? rect.height * 0.58 : rect.height * 0.28;
+  const stageRank = { future: 1, potential: 2, imminent: 3, confirmed: 4 }[projection.stage] || 0;
+
+  if ((visible.entryZones || visible.futureZones) && visible.futureZones && stageRank >= 1) {
+    ctx.fillStyle = isBuy ? "rgba(70, 209, 123, 0.08)" : "rgba(239, 98, 98, 0.08)";
+    ctx.strokeStyle = isBuy ? "rgba(70, 209, 123, 0.34)" : "rgba(239, 98, 98, 0.34)";
+    ctx.strokeRect(rect.width * 0.56, zoneY, rect.width * 0.24, 48);
+    ctx.fillRect(rect.width * 0.56, zoneY, rect.width * 0.24, 48);
+    drawReplayLabel(ctx, rect.width * 0.57, zoneY - 28, `Zone potentielle ${projection.direction}`, color);
   }
+  if (visible.potentialEntries && stageRank >= 2) drawReplayLabel(ctx, rect.width * 0.58, zoneY + 56, "Entrée potentielle — attendre réaction", "#e7b84e");
+  if (visible.imminentEntries && stageRank >= 3) drawReplayLabel(ctx, rect.width * 0.58, zoneY + 88, "Entrée imminente — prépare-toi", color);
+  if (visible.confirmedSignals && stageRank >= 4) drawReplayLabel(ctx, rect.width * 0.58, zoneY + 120, `${projection.direction} confirmé`, color);
+
+  const showPositionTool = stageRank >= 4 && ((isBuy && visible.longPositionTool) || (!isBuy && visible.shortPositionTool));
+  if (showPositionTool) drawReplayPositionTool(ctx, rect, projection, priceToY, color);
+}
+
+function drawReplayPositionTool(ctx, rect, projection, priceToY, color) {
+  const visible = state.smartMoneyVisibility;
+  const setup = projection.setup;
+  const entry = parsePrice(setup.entry);
+  const sl = parsePrice(setup.sl);
+  const tp1 = parsePrice(setup.tp1);
+  const tp2 = parsePrice(setup.tp2);
+  const tp3 = parsePrice(setup.tp3);
+  if (![entry, sl, tp1, tp2, tp3].every(Number.isFinite)) return;
+
+  drawReplayLine(ctx, priceToY(entry), "#e7b84e", `Entrée ${setup.entry}`, rect);
+  if (visible.slTp) {
+    drawReplayLine(ctx, priceToY(sl), "#ef6262", `SL ${setup.sl} · ${projection.metrics.riskPoints}`, rect);
+    drawReplayLine(ctx, priceToY(tp1), "#46d17b", `TP1 ${setup.tp1} · ${projection.metrics.tp1Points}`, rect);
+    drawReplayLine(ctx, priceToY(tp2), "#46d17b", `TP2 ${setup.tp2} · ${projection.metrics.tp2Points}`, rect);
+    drawReplayLine(ctx, priceToY(tp3), "#46d17b", `TP3 ${setup.tp3} · ${projection.metrics.tp3Points}`, rect);
+  }
+  const label = visible.riskReward
+    ? `${projection.direction === "BUY" ? "Position longue" : "Position courte"} · RR ${projection.metrics.rr1}/${projection.metrics.rr2}/${projection.metrics.rr3} · ${projection.metrics.status}`
+    : `${projection.direction === "BUY" ? "Position longue" : "Position courte"} · ${projection.metrics.status}`;
+  drawReplayLabel(ctx, rect.width * 0.66, priceToY(entry) - 34, label, color);
 }
 
 function drawReplayLine(ctx, y, color, label, rect) {
@@ -845,7 +892,7 @@ function drawReplayLabel(ctx, x, y, label, color) {
   ctx.fillText(label, x + 7, y + 16);
 }
 
-function updateReplayJournal(activeResult, context, visibleCandles) {
+function updateReplayJournal(activeResult, context, visibleCandles, entryProjection) {
   updateOpenReplayResults(visibleCandles);
   if (activeResult.status !== "BUY" && activeResult.status !== "SELL") {
     renderReplayJournal();
@@ -871,6 +918,8 @@ function updateReplayJournal(activeResult, context, visibleCandles) {
     reason: activeResult.reason,
     candleQuality: context.candleScan.quality,
     candleSummary: context.candleScan.summary,
+    positionStatus: entryProjection.metrics.status,
+    riskReward: `${entryProjection.metrics.rr1}/${entryProjection.metrics.rr2}/${entryProjection.metrics.rr3}`,
   });
   postApiLog({
     type: "replay-signal",
@@ -883,6 +932,8 @@ function updateReplayJournal(activeResult, context, visibleCandles) {
     reason: activeResult.reason,
     candleQuality: context.candleScan.quality,
     candleSummary: context.candleScan.summary,
+    positionStatus: entryProjection.metrics.status,
+    riskReward: `${entryProjection.metrics.rr1}/${entryProjection.metrics.rr2}/${entryProjection.metrics.rr3}`,
   });
   renderReplayJournal();
 }
@@ -936,6 +987,7 @@ function renderReplayJournal() {
           <span>${entry.mode} · Entrée ${entry.entry} · SL ${entry.sl} · TP ${entry.tp}</span>
           <span>Résultat: ${entry.result}</span>
           <span>Candle Quality: ${entry.candleQuality}/100</span>
+          <span>Position: ${entry.positionStatus} · RR ${entry.riskReward}</span>
           <small>${entry.candleSummary}</small>
           <small>${entry.reason}</small>
         </article>
@@ -1311,15 +1363,16 @@ function evaluateAndRender() {
   const smartResult = buildSmartMoneyAnalysis(session, market, news, zones, confirmation, candleScan);
   const goldResult = buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session, candleScan);
   const activeResult = state.analysisMode === "gold" ? goldResult : smartResult;
+  const entryProjection = buildEntryProjection(activeResult, market, zones, confirmation, candleScan, buildLiveCandles(market));
 
   elements.sessionName.textContent = session.name;
   elements.marketBias.textContent = activeResult.biasLabel;
   elements.scoreTop.textContent = activeResult.score;
-  elements.setupState.textContent = activeResult.setupState;
+  elements.setupState.textContent = entryProjection.statusLabel;
   elements.activeModeLabel.textContent = activeResult.name;
   elements.tradeDirection.textContent = activeResult.status;
   elements.tradeDirection.style.color = getStatusColor(activeResult.status);
-  elements.signalReason.textContent = activeResult.reason;
+  elements.signalReason.textContent = entryProjection.reason;
   elements.badgeRow.innerHTML = activeResult.badges.map(renderBadge).join("");
   elements.scoreFill.style.width = `${activeResult.score}%`;
   elements.scoreValue.textContent = `${activeResult.score} / 100`;
@@ -1339,8 +1392,8 @@ function evaluateAndRender() {
 
   renderBlocks(activeResult.blocks);
   renderComparison(smartResult, goldResult);
-  renderScenarios(market, zones, confirmation, session);
-  renderStrategyOverlay(activeResult.direction, zones, confirmation);
+  renderScenarios(market, zones, confirmation, session, entryProjection);
+  renderStrategyOverlay(activeResult.direction, zones, confirmation, entryProjection);
   renderRsiPanel(rsi);
   renderCandleScanner(candleScan);
 }
@@ -1677,6 +1730,112 @@ function getMissingReason(market, news, zones, confirmation, candleScan) {
   return "Attente confirmation";
 }
 
+function buildEntryProjection(activeResult, market, zones, confirmation, candleScan, candles = []) {
+  const confirmed = activeResult.status === "BUY" || activeResult.status === "SELL";
+  const direction = confirmed ? activeResult.status : inferProjectionDirection(activeResult, market, zones);
+  const hasDirection = direction === "BUY" || direction === "SELL";
+  const stage = getEntryProjectionStage(confirmed, market, zones, confirmation, candleScan);
+  const setup = confirmed ? activeResult.setup : hasDirection ? buildSetup(direction, zones, confirmation) : buildSetup("WAIT", zones, confirmation);
+  const metrics = buildPositionMetrics(direction, setup, stage, candles);
+
+  return {
+    stage,
+    direction,
+    setup,
+    metrics,
+    statusLabel: getProjectionStatusLabel(stage, direction),
+    reason: getProjectionReason(stage, direction, zones, confirmation, candleScan, activeResult),
+  };
+}
+
+function inferProjectionDirection(activeResult, market, zones) {
+  if (activeResult.status === "BUY" || activeResult.status === "SELL") return activeResult.status;
+  if (market.bias === "BUY" || market.bias === "SELL") return market.bias;
+  if (String(zones.primary).toLowerCase().includes("bearish")) return "SELL";
+  return "BUY";
+}
+
+function getEntryProjectionStage(confirmed, market, zones, confirmation, candleScan) {
+  if (confirmed) return "confirmed";
+  if (market.valid && zones.valid && confirmation.choch && (candleScan.quality >= 50 || candleScan.current?.detections?.wickRejection)) return "imminent";
+  if (market.valid && (zones.valid || zones.liquidityTaken)) return "potential";
+  return "future";
+}
+
+function getProjectionStatusLabel(stage, direction) {
+  if (stage === "confirmed") return `${direction} confirmé`;
+  if (stage === "imminent") return "Entrée imminente — prépare-toi";
+  if (stage === "potential") return "Entrée potentielle — attendre réaction";
+  return `Zone potentielle ${direction}`;
+}
+
+function getProjectionReason(stage, direction, zones, confirmation, candleScan, activeResult) {
+  if (stage === "confirmed") return activeResult.reason;
+  if (stage === "imminent") return `${direction}: prix dans la zone, ${confirmation.choch ? "ChoCH/BOS possible" : "structure en formation"}, ${candleScan.summary}`;
+  if (stage === "potential") return `${direction}: direction cohérente, prix proche de ${zones.primary}. Attendre rejet et clôture claire.`;
+  return `${direction}: zone détectée à l'avance sur ${zones.primary}. Aucun signal d'entrée encore.`;
+}
+
+function buildPositionMetrics(direction, setup, stage, candles = []) {
+  const entry = parsePrice(setup.entry);
+  const sl = parsePrice(setup.sl);
+  const tp1 = parsePrice(setup.tp1);
+  const tp2 = parsePrice(setup.tp2);
+  const tp3 = parsePrice(setup.tp3);
+  if (direction !== "BUY" && direction !== "SELL") return { valid: false, status: "en attente", rr1: "--", rr2: "--", rr3: "--", riskPoints: "--", tp1Points: "--", tp2Points: "--", tp3Points: "--" };
+  if (![entry, sl, tp1, tp2, tp3].every(Number.isFinite)) return { valid: false, status: "en attente", rr1: "--", rr2: "--", rr3: "--", riskPoints: "--", tp1Points: "--", tp2Points: "--", tp3Points: "--" };
+
+  const risk = Math.abs(entry - sl);
+  const tp1Distance = Math.abs(tp1 - entry);
+  const tp2Distance = Math.abs(tp2 - entry);
+  const tp3Distance = Math.abs(tp3 - entry);
+  const status = getPositionStatus(direction, { entry, sl, tp1, tp2, tp3 }, stage, candles);
+
+  return {
+    valid: true,
+    status,
+    rr1: formatRatio(tp1Distance / risk),
+    rr2: formatRatio(tp2Distance / risk),
+    rr3: formatRatio(tp3Distance / risk),
+    riskPoints: formatPoints(risk),
+    tp1Points: formatPoints(tp1Distance),
+    tp2Points: formatPoints(tp2Distance),
+    tp3Points: formatPoints(tp3Distance),
+  };
+}
+
+function getPositionStatus(direction, levels, stage, candles) {
+  if (stage !== "confirmed") return "en attente";
+  const afterEntry = candles.filter((candle) => direction === "BUY" ? candle.high >= levels.entry : candle.low <= levels.entry);
+  if (!afterEntry.length) return "actif";
+  for (const candle of afterEntry) {
+    if (direction === "BUY") {
+      if (candle.low <= levels.sl) return "SL touché";
+      if (candle.high >= levels.tp3) return "TP3 touché";
+      if (candle.high >= levels.tp2) return "TP2 touché";
+      if (candle.high >= levels.tp1) return "TP1 touché";
+      if (candle.low <= levels.entry && candle.close > levels.entry) return "break-even";
+    } else {
+      if (candle.high >= levels.sl) return "SL touché";
+      if (candle.low <= levels.tp3) return "TP3 touché";
+      if (candle.low <= levels.tp2) return "TP2 touché";
+      if (candle.low <= levels.tp1) return "TP1 touché";
+      if (candle.high >= levels.entry && candle.close < levels.entry) return "break-even";
+    }
+  }
+  return "actif";
+}
+
+function formatRatio(value) {
+  if (!Number.isFinite(value)) return "--";
+  return `1:${value.toFixed(2)}`;
+}
+
+function formatPoints(value) {
+  if (!Number.isFinite(value)) return "--";
+  return `${value.toFixed(2)} pts`;
+}
+
 function renderBlocks(blockRows) {
   elements.blockChecks.innerHTML = blockRows
     .map(([label, valid, reason]) => {
@@ -1744,11 +1903,11 @@ function getStatusColor(status) {
   return "var(--gold)";
 }
 
-function renderScenarios(market, zones, confirmation, session) {
+function renderScenarios(market, zones, confirmation, session, entryProjection) {
   const scenarios = [
     {
-      title: `${market.bias === "SELL" ? "Short" : "Long"} sur retour zone clé`,
-      body: `${zones.primary} · ${session.name} · ${confirmation.timeframe}`,
+      title: entryProjection.statusLabel,
+      body: entryProjection.reason,
     },
     {
       title: "Attente sweep + displacement",
@@ -1761,7 +1920,62 @@ function renderScenarios(market, zones, confirmation, session) {
     .join("");
 }
 
-function renderStrategyOverlay(direction, zones, confirmation) {
+function addEntryProjectionItems(items, projection) {
+  if (!projection || projection.direction === "WAIT") return;
+  const visible = state.smartMoneyVisibility;
+  const isBuy = projection.direction === "BUY";
+  const sideClass = isBuy ? "overlay-buy" : "overlay-sell";
+  const stageRank = { future: 1, potential: 2, imminent: 3, confirmed: 4 }[projection.stage] || 0;
+  const top = isBuy ? 56 : 28;
+
+  if ((visible.entryZones || visible.futureZones) && visible.futureZones && stageRank >= 1) {
+    items.push({
+      className: `overlay-entry-zone overlay-zone-future ${sideClass}`,
+      label: `Zone potentielle ${projection.direction}`,
+      style: `left: 53%; top: ${top}%; width: 24%; height: 9%;`,
+    });
+  }
+  if (visible.potentialEntries && stageRank >= 2) {
+    items.push({
+      className: `overlay-entry-stage overlay-entry-potential ${sideClass}`,
+      label: "Entrée potentielle — attendre réaction",
+      style: `left: 50%; top: ${top + 10}%; width: 30%;`,
+    });
+  }
+  if (visible.imminentEntries && stageRank >= 3) {
+    items.push({
+      className: `overlay-entry-stage overlay-entry-imminent ${sideClass}`,
+      label: "Entrée imminente — prépare-toi",
+      style: `left: 49%; top: ${top + 16}%; width: 32%;`,
+    });
+  }
+  if (visible.confirmedSignals && stageRank >= 4) {
+    items.push({
+      className: `overlay-entry-stage overlay-signal-confirmed ${sideClass}`,
+      label: `${projection.direction} confirmé`,
+      style: `left: 48%; top: ${top + 22}%; width: 20%;`,
+    });
+  }
+
+  const showTool = stageRank >= 4 && ((isBuy && visible.longPositionTool) || (!isBuy && visible.shortPositionTool));
+  if (showTool) addPositionToolItem(items, projection, top, sideClass);
+}
+
+function addPositionToolItem(items, projection, top, sideClass) {
+  const visible = state.smartMoneyVisibility;
+  const setup = projection.setup;
+  const metrics = projection.metrics;
+  const toolLabel = projection.direction === "BUY" ? "Position longue" : "Position courte";
+  const rr = visible.riskReward ? ` · RR ${metrics.rr1}/${metrics.rr2}/${metrics.rr3}` : "";
+  const slTp = visible.slTp ? ` · SL ${setup.sl} · TP1 ${setup.tp1} · TP2 ${setup.tp2} · TP3 ${setup.tp3}` : "";
+  items.push({
+    className: `overlay-position-tool ${projection.direction === "BUY" ? "overlay-position-long" : "overlay-position-short"} ${sideClass}`,
+    label: `${toolLabel} · Entrée ${setup.entry}${slTp}${rr} · ${metrics.status}`,
+    style: `left: 12%; top: ${projection.direction === "BUY" ? top - 18 : top + 30}%; width: 37%;`,
+  });
+}
+
+function renderStrategyOverlay(direction, zones, confirmation, entryProjection) {
   const visible = state.smartMoneyVisibility;
   const classic = state.classicVisibility;
   const items = [];
@@ -1783,7 +1997,7 @@ function renderStrategyOverlay(direction, zones, confirmation) {
     items.push({ className: "overlay-tp overlay-line", label: "", style: "left: 10%; top: 14%; width: 78%;" });
     items.push({ className: "overlay-sl overlay-line", label: "", style: "left: 10%; top: 82%; width: 78%;" });
   }
-  if (visible.entryZones) items.push({ className: direction === "SELL" ? "overlay-sell" : "overlay-buy", label: "Entrée", style: "left: 58%; top: 56%; width: 14%; height: 7%;" });
+  addEntryProjectionItems(items, entryProjection);
   if (classic.ema20) items.push({ className: "overlay-ema overlay-ema20", label: "", style: "left: 12%; top: 37%; width: 68%; transform: rotate(-7deg);" });
   if (classic.ema50) items.push({ className: "overlay-ema overlay-ema50", label: "", style: "left: 10%; top: 48%; width: 70%; transform: rotate(-3deg);" });
   if (classic.ema200) items.push({ className: "overlay-ema overlay-ema200", label: "", style: "left: 8%; top: 59%; width: 72%; transform: rotate(2deg);" });

@@ -677,6 +677,61 @@ button:active {
   background: rgba(231, 184, 78, 0.055);
 }
 
+.overlay-entry-zone {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  opacity: 0.7;
+}
+
+.overlay-zone-future {
+  border-style: dashed;
+  background: rgba(231, 184, 78, 0.075);
+}
+
+.overlay-entry-stage {
+  min-height: 28px;
+  background: rgba(231, 184, 78, 0.13);
+  box-shadow: 0 0 18px rgba(231, 184, 78, 0.12);
+}
+
+.overlay-entry-potential {
+  opacity: 0.86;
+}
+
+.overlay-entry-imminent {
+  border-width: 2px;
+  opacity: 1;
+  box-shadow: 0 0 22px rgba(231, 184, 78, 0.28);
+}
+
+.overlay-signal-confirmed {
+  border-width: 2px;
+  color: #fff;
+  text-transform: uppercase;
+  box-shadow: 0 0 26px rgba(70, 209, 123, 0.26);
+}
+
+.overlay-position-tool {
+  z-index: 2;
+  min-height: 52px;
+  padding: 9px 10px;
+  border-width: 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  white-space: normal;
+  box-shadow: 0 0 26px rgba(231, 184, 78, 0.22);
+}
+
+.overlay-position-long {
+  background: linear-gradient(180deg, rgba(70, 209, 123, 0.2), rgba(70, 209, 123, 0.08));
+}
+
+.overlay-position-short {
+  background: linear-gradient(180deg, rgba(239, 98, 98, 0.2), rgba(239, 98, 98, 0.08));
+}
+
 .signal-card {
   padding: 14px;
   border: 1px solid var(--line);
