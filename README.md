@@ -6,6 +6,20 @@ Nouvelle application V1 pour analyser XAUUSD autour d'un graphique TradingView o
 
 Ouvrir `index.html` dans un navigateur moderne.
 
+## Backend local
+
+Le dossier `tsr-data-api` contient une API Node.js locale separee pour lire les donnees XAUUSD depuis le stockage local configure par `TSR_DATA_DIR`.
+
+```powershell
+cd D:\goldtradetsr\tsr-data-api
+$env:TSR_DATA_API_KEY="votre-cle-locale"
+$env:TSR_DATA_DIR="J:\tsr-trading-data"
+$env:PORT="4000"
+npm start
+```
+
+Routes disponibles: `GET /health`, `GET /history`, `GET /replay`, `GET /signals`, `POST /logs`.
+
 ## Ce que contient la V1
 
 - Graphique TradingView `OANDA:XAUUSD` visible au centre.
