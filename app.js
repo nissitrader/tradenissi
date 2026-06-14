@@ -362,13 +362,14 @@ async function postApiLog(payload) {
 
 async function tsrDataRequest(endpoint, options = {}) {
   const method = options.method || "GET";
-  const params = new URLSearchParams({ endpoint });
+  const params = new URLSearchParams();
   Object.entries(options.params || {}).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== "") params.set(key, value);
   });
+  const query = params.toString();
 
   try {
-    const response = await fetch(`/api/tsr-data?${params.toString()}`, {
+    const response = await fetch(`/api/tsr-data/${endpoint}${query ? `?${query}` : ""}`, {
       method,
       headers: { "content-type": "application/json" },
       body: method === "POST" ? JSON.stringify(options.body || {}) : undefined,

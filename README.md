@@ -22,7 +22,7 @@ Routes disponibles: `GET /health`, `GET /history`, `GET /replay`, `GET /signals`
 
 ## Connexion TSR Data API
 
-Le frontend Vercel passe par `/api/tsr-data`, qui ajoute la cle API cote serveur et evite d'exposer `TSR_DATA_API_KEY` dans le navigateur.
+Le frontend Vercel passe uniquement par les routes internes `/api/tsr-data/*`, qui ajoutent la cle API cote serveur et evitent d'exposer `TSR_DATA_API_KEY` dans le navigateur.
 
 Variables Vercel requises :
 
@@ -32,6 +32,8 @@ TSR_DATA_API_KEY=votre-cle-locale
 ```
 
 Les donnees lourdes ne sont pas stockees sur Vercel : historique, replay, signaux et logs passent par TSR Data API.
+
+Routes proxy Vercel disponibles : `/api/tsr-data/health`, `/api/tsr-data/history`, `/api/tsr-data/replay`, `/api/tsr-data/signals` et `/api/tsr-data/logs`.
 
 Si `/replay` et `/history` repondent correctement mais sans bougies pour la date choisie, l'interface active un replay d'entrainement local afin de garder les controles utilisables. Quand l'API est indisponible, le replay affiche le message de blocage demande et ne masque pas l'erreur.
 
