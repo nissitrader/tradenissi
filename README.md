@@ -1,6 +1,6 @@
-# XAUUSD Smart Money Scalper
+# TSR Gold Intelligence Engine
 
-Nouvelle application V1 pour analyser XAUUSD autour d'un graphique TradingView officiel.
+Nouvelle application V1 pour analyser XAUUSD autour d'un graphique TradingView officiel, avec le branding TSR Gold Intelligence Engine.
 
 ## Lancer l'application
 
@@ -9,6 +9,7 @@ Ouvrir `index.html` dans un navigateur moderne.
 ## Ce que contient la V1
 
 - Graphique TradingView `OANDA:XAUUSD` visible au centre.
+- Logo TSR intégré dans l'en-tête et utilisé comme favicon.
 - Timeframes H4, H1, M30, M15, M5, M1 et 30s.
 - Panneaux modulables, mode graphique large et plein écran.
 - Overlays activables: Order Blocks, FVG, Equal High/Low, Liquidity Sweep, BOS, ChoCH, trendlines, sessions, previous high/low, zones d'entrée, SL/TP et scénarios.

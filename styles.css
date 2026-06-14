@@ -90,16 +90,13 @@ button:active {
   border-radius: 8px;
 }
 
-.brand-mark {
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
+.brand-logo {
+  width: 52px;
+  height: 52px;
   border: 1px solid rgba(231, 184, 78, 0.52);
   border-radius: 8px;
   background: rgba(231, 184, 78, 0.12);
-  color: var(--gold);
-  font-weight: 800;
+  object-fit: cover;
 }
 
 .brand h1,
