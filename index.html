@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>XAUUSD Smart Money Scalper</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <section class="brand">
+          <span class="brand-mark">XAU</span>
+          <div>
+            <h1>XAUUSD Smart Money Scalper</h1>
+            <p>TradingView live · ICT · Order Blocks · Liquidité</p>
+          </div>
+        </section>
+
+        <section class="market-strip" aria-label="Résumé marché">
+          <article>
+            <span>Actif</span>
+            <strong>XAUUSD</strong>
+          </article>
+          <article>
+            <span>Session</span>
+            <strong id="sessionName">--</strong>
+          </article>
+          <article>
+            <span>Biais</span>
+            <strong id="marketBias">Attente</strong>
+          </article>
+          <article>
+            <span>Score</span>
+            <strong id="scoreTop">0</strong>
+          </article>
+        </section>
+      </header>
+
+      <section class="workspace" id="workspace">
+        <aside class="control-panel">
+          <div class="panel-head">
+            <h2>Affichage</h2>
+            <button class="icon-button" id="toggleControls" type="button" title="Réduire le panneau gauche" aria-label="Réduire le panneau gauche">
+              ◀
+            </button>
+          </div>
+
+          <div class="timeframe-grid" aria-label="Timeframes">
+            <button type="button" data-interval="240" class="tf active">H4</button>
+            <button type="button" data-interval="60" class="tf">H1</button>
+            <button type="button" data-interval="30" class="tf">M30</button>
+            <button type="button" data-interval="15" class="tf">M15</button>
+            <button type="button" data-interval="5" class="tf">M5</button>
+            <button type="button" data-interval="1" class="tf">M1</button>
+            <button type="button" data-interval="30S" class="tf">30s</button>
+          </div>
+
+          <div class="layout-tools">
+            <button type="button" data-layout="balanced" class="layout-btn active">Équilibré</button>
+            <button type="button" data-layout="chart">Graphique</button>
+            <button type="button" data-layout="analysis">Analyse</button>
+          </div>
+
+          <label class="range-control">
+            <span>Taille graphique</span>
+            <input id="chartScale" type="range" min="48" max="76" value="61" />
+          </label>
+
+          <div class="checkbox-list" id="overlayControls"></div>
+        </aside>
+
+        <section class="chart-desk">
+          <div class="chart-toolbar">
+            <div class="chart-title">
+              <span class="live-dot"></span>
+              <strong>TradingView XAUUSD</strong>
+              <small id="chartInterval">H4</small>
+            </div>
+            <div class="toolbar-actions">
+              <button type="button" id="refreshWidget" title="Recharger TradingView" aria-label="Recharger TradingView">↻</button>
+              <button type="button" id="fullscreenChart" title="Agrandir le graphique" aria-label="Agrandir le graphique">⛶</button>
+            </div>
+          </div>
+
+          <div class="chart-frame" id="chartFrame">
+            <div id="tradingview_chart"></div>
+            <div class="strategy-overlay" id="strategyOverlay" aria-hidden="true"></div>
+          </div>
+        </section>
+
+        <aside class="signal-panel">
+          <div class="panel-head">
+            <h2>Décision</h2>
+            <button class="icon-button" id="toggleSignal" type="button" title="Réduire le panneau droit" aria-label="Réduire le panneau droit">
+              ▶
+            </button>
+          </div>
+
+          <section class="signal-card" id="signalCard">
+            <span class="setup-state" id="setupState">Setup incomplet</span>
+            <h3 id="tradeDirection">ATTENTE</h3>
+            <p id="signalReason">Initialisation de l'analyse top-down.</p>
+            <div class="score-meter">
+              <div class="score-fill" id="scoreFill"></div>
+            </div>
+            <div class="score-row">
+              <span>Qualité</span>
+              <strong id="scoreValue">0 / 100</strong>
+            </div>
+          </section>
+
+          <section class="levels-grid" aria-label="Niveaux du setup">
+            <article>
+              <span>Entrée</span>
+              <strong id="entryPrice">--</strong>
+            </article>
+            <article>
+              <span>Stop Loss</span>
+              <strong id="stopLoss">--</strong>
+            </article>
+            <article>
+              <span>TP1</span>
+              <strong id="tp1">--</strong>
+            </article>
+            <article>
+              <span>TP2</span>
+              <strong id="tp2">--</strong>
+            </article>
+            <article>
+              <span>TP3</span>
+              <strong id="tp3">--</strong>
+            </article>
+            <article>
+              <span>Confirmation</span>
+              <strong id="confirmTf">--</strong>
+            </article>
+          </section>
+
+          <section class="analysis-block">
+            <h2>4 blocs</h2>
+            <div id="blockChecks" class="block-checks"></div>
+          </section>
+
+          <section class="analysis-block">
+            <h2>Détails</h2>
+            <dl class="detail-list">
+              <div>
+                <dt>Zone utilisée</dt>
+                <dd id="usedZone">--</dd>
+              </div>
+              <div>
+                <dt>Liquidité ciblée</dt>
+                <dd id="targetLiquidity">--</dd>
+              </div>
+              <div>
+                <dt>News USD</dt>
+                <dd id="newsRisk">Chargement quotidien</dd>
+              </div>
+              <div>
+                <dt>Blocage</dt>
+                <dd id="blockingReason">--</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="analysis-block">
+            <h2>Scénarios actifs</h2>
+            <div id="scenarioList" class="scenario-list"></div>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <script src="https://s3.tradingview.com/tv.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
