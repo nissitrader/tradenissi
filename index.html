@@ -67,6 +67,28 @@
             <button type="button" data-layout="analysis">Analyse</button>
           </div>
 
+          <section class="mode-picker" aria-label="Mode d'analyse">
+            <h3>Mode d'analyse</h3>
+            <label class="mode-option">
+              <input type="radio" name="analysisMode" value="smart" checked />
+              <span>
+                <strong>TSR Smart Money</strong>
+                <small>Analyse rapide, plus réactive, adaptée au scalping XAUUSD.</small>
+              </span>
+            </label>
+            <label class="mode-option">
+              <input type="radio" name="analysisMode" value="gold" />
+              <span>
+                <strong>TSR Gold Intelligence</strong>
+                <small>Analyse avancée, plus sélective, avec confluence maximale.</small>
+              </span>
+            </label>
+            <label class="compare-toggle">
+              <input type="checkbox" id="showBothAnalyses" />
+              <span>Afficher les deux analyses</span>
+            </label>
+          </section>
+
           <label class="range-control">
             <span>Taille graphique</span>
             <input id="chartScale" type="range" min="48" max="76" value="61" />
@@ -104,8 +126,10 @@
 
           <section class="signal-card" id="signalCard">
             <span class="setup-state" id="setupState">Setup incomplet</span>
+            <small class="active-mode-label" id="activeModeLabel">TSR Smart Money</small>
             <h3 id="tradeDirection">ATTENTE</h3>
             <p id="signalReason">Initialisation de l'analyse top-down.</p>
+            <div class="badge-row" id="badgeRow"></div>
             <div class="score-meter">
               <div class="score-fill" id="scoreFill"></div>
             </div>
@@ -114,6 +138,8 @@
               <strong id="scoreValue">0 / 100</strong>
             </div>
           </section>
+
+          <section class="compare-results" id="compareResults" aria-label="Comparaison des modes"></section>
 
           <section class="levels-grid" aria-label="Niveaux du setup">
             <article>
@@ -165,6 +191,18 @@
               <div>
                 <dt>Blocage</dt>
                 <dd id="blockingReason">--</dd>
+              </div>
+              <div>
+                <dt>Direction H1</dt>
+                <dd id="h1Direction">--</dd>
+              </div>
+              <div>
+                <dt>Direction M15</dt>
+                <dd id="m15Direction">--</dd>
+              </div>
+              <div>
+                <dt>Confirmations</dt>
+                <dd id="confirmationSummary">--</dd>
               </div>
             </dl>
           </section>

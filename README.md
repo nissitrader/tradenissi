@@ -15,6 +15,10 @@ Ouvrir `index.html` dans un navigateur moderne.
 - Indicateurs Smart Money activables: Order Blocks, FVG, Equal High/Low, Liquidity Sweep, BOS, ChoCH, trendlines, sessions, previous high/low et zones d'entrée.
 - Indicateurs classiques activables séparément: EMA 20, EMA 50, EMA 200, VWAP, SuperTrend et Volume.
 - Tableau de décision avec score 0-100, blocs de validation, raison exacte d'attente et niveaux de setup.
+- Deux modes d'analyse cliquables:
+  - TSR Smart Money: analyse rapide et réactive.
+  - TSR Gold Intelligence: couche stricte au-dessus du Mode 1 avec H1, OB H1, raffinement M15 et confirmations avancées.
+- Option pour afficher les deux analyses côte à côte.
 - Chargement quotidien des news USD critiques via cache local quand le flux public est disponible.
 
 ## Note technique

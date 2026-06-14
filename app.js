@@ -24,6 +24,8 @@ const classicIndicators = [
 const state = {
   interval: "240",
   intervalLabel: "H4",
+  analysisMode: "smart",
+  showBothAnalyses: false,
   smartMoneyVisibility: Object.fromEntries(smartMoneyOverlays.map((item) => [item.id, item.defaultOn])),
   classicVisibility: Object.fromEntries(classicIndicators.map((item) => [item.id, item.defaultOn])),
   tick: 0,
@@ -42,10 +44,13 @@ const elements = {
   marketBias: document.getElementById("marketBias"),
   scoreTop: document.getElementById("scoreTop"),
   setupState: document.getElementById("setupState"),
+  activeModeLabel: document.getElementById("activeModeLabel"),
   tradeDirection: document.getElementById("tradeDirection"),
   signalReason: document.getElementById("signalReason"),
+  badgeRow: document.getElementById("badgeRow"),
   scoreFill: document.getElementById("scoreFill"),
   scoreValue: document.getElementById("scoreValue"),
+  compareResults: document.getElementById("compareResults"),
   entryPrice: document.getElementById("entryPrice"),
   stopLoss: document.getElementById("stopLoss"),
   tp1: document.getElementById("tp1"),
@@ -57,6 +62,9 @@ const elements = {
   targetLiquidity: document.getElementById("targetLiquidity"),
   newsRisk: document.getElementById("newsRisk"),
   blockingReason: document.getElementById("blockingReason"),
+  h1Direction: document.getElementById("h1Direction"),
+  m15Direction: document.getElementById("m15Direction"),
+  confirmationSummary: document.getElementById("confirmationSummary"),
   scenarioList: document.getElementById("scenarioList"),
 };
 
@@ -156,6 +164,20 @@ function bindInteractions() {
     });
   });
 
+  document.querySelectorAll("[name='analysisMode']").forEach((input) => {
+    input.addEventListener("change", () => {
+      if (input.checked) {
+        state.analysisMode = input.value;
+        evaluateAndRender();
+      }
+    });
+  });
+
+  document.getElementById("showBothAnalyses").addEventListener("change", (event) => {
+    state.showBothAnalyses = event.target.checked;
+    evaluateAndRender();
+  });
+
   document.querySelectorAll("[data-smart-overlay]").forEach((input) => {
     input.addEventListener("change", () => {
       state.smartMoneyVisibility[input.dataset.smartOverlay] = input.checked;
@@ -242,37 +264,39 @@ function evaluateAndRender() {
   const news = getNewsRisk();
   const zones = getKeyZones(market);
   const confirmation = getEntryConfirmation(market, zones);
-  const score = scoreSetup(market, news, zones, confirmation);
-  const allBlocksValid = market.valid && news.valid && zones.valid && confirmation.valid;
-  const direction = allBlocksValid ? market.bias : "WAIT";
-  const setup = buildSetup(direction, zones, confirmation);
-  const missingReason = getMissingReason(market, news, zones, confirmation);
+  const smartResult = buildSmartMoneyAnalysis(session, market, news, zones, confirmation);
+  const goldResult = buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session);
+  const activeResult = state.analysisMode === "gold" ? goldResult : smartResult;
 
   elements.sessionName.textContent = session.name;
-  elements.marketBias.textContent = market.action;
-  elements.scoreTop.textContent = score;
-  elements.setupState.textContent = allBlocksValid ? "Setup complet" : "Setup incomplet";
-  elements.tradeDirection.textContent = allBlocksValid ? direction : "ATTENTE";
-  elements.tradeDirection.style.color = direction === "BUY" ? "var(--green)" : direction === "SELL" ? "var(--red)" : "var(--gold)";
-  elements.signalReason.textContent = allBlocksValid
-    ? `${direction} validé: ${market.context}, ${zones.primary}, ${confirmation.reason}.`
-    : `Setup incomplet — ${missingReason}`;
-  elements.scoreFill.style.width = `${score}%`;
-  elements.scoreValue.textContent = `${score} / 100`;
-  elements.entryPrice.textContent = setup.entry;
-  elements.stopLoss.textContent = setup.sl;
-  elements.tp1.textContent = setup.tp1;
-  elements.tp2.textContent = setup.tp2;
-  elements.tp3.textContent = setup.tp3;
-  elements.confirmTf.textContent = confirmation.timeframe;
-  elements.usedZone.textContent = zones.primary;
-  elements.targetLiquidity.textContent = zones.targetLiquidity;
+  elements.marketBias.textContent = activeResult.biasLabel;
+  elements.scoreTop.textContent = activeResult.score;
+  elements.setupState.textContent = activeResult.setupState;
+  elements.activeModeLabel.textContent = activeResult.name;
+  elements.tradeDirection.textContent = activeResult.status;
+  elements.tradeDirection.style.color = getStatusColor(activeResult.status);
+  elements.signalReason.textContent = activeResult.reason;
+  elements.badgeRow.innerHTML = activeResult.badges.map(renderBadge).join("");
+  elements.scoreFill.style.width = `${activeResult.score}%`;
+  elements.scoreValue.textContent = `${activeResult.score} / 100`;
+  elements.entryPrice.textContent = activeResult.setup.entry;
+  elements.stopLoss.textContent = activeResult.setup.sl;
+  elements.tp1.textContent = activeResult.setup.tp1;
+  elements.tp2.textContent = activeResult.setup.tp2;
+  elements.tp3.textContent = activeResult.setup.tp3;
+  elements.confirmTf.textContent = activeResult.timeframe;
+  elements.usedZone.textContent = activeResult.zone;
+  elements.targetLiquidity.textContent = activeResult.liquidity;
   elements.newsRisk.textContent = news.label;
-  elements.blockingReason.textContent = allBlocksValid ? "Aucun" : missingReason;
+  elements.blockingReason.textContent = activeResult.blockingReason;
+  elements.h1Direction.textContent = goldResult.h1Direction;
+  elements.m15Direction.textContent = goldResult.m15Direction;
+  elements.confirmationSummary.textContent = activeResult.confirmationSummary;
 
-  renderBlocks(market, news, zones, confirmation);
+  renderBlocks(activeResult.blocks);
+  renderComparison(smartResult, goldResult);
   renderScenarios(market, zones, confirmation, session);
-  renderStrategyOverlay(direction, zones, confirmation);
+  renderStrategyOverlay(activeResult.direction, zones, confirmation);
 }
 
 function getSession() {
@@ -369,6 +393,182 @@ function scoreSetup(market, news, zones, confirmation) {
   return clamp(Math.round(score), 0, 100);
 }
 
+function buildSmartMoneyAnalysis(session, market, news, zones, confirmation) {
+  const score = scoreSetup(market, news, zones, confirmation);
+  const valid = market.valid && news.valid && zones.valid && confirmation.valid;
+  const direction = valid ? market.bias : "WAIT";
+  const setup = buildSetup(direction, zones, confirmation);
+  const missingReason = getMissingReason(market, news, zones, confirmation);
+  const scoreLabel = score >= 85 ? "setup fort" : score >= 70 ? "signal possible" : score >= 50 ? "attente" : "pas de trade";
+
+  return {
+    id: "smart",
+    name: "TSR Smart Money",
+    valid,
+    direction,
+    status: valid ? direction : "ATTENTE",
+    setupState: valid ? "Setup complet" : "Setup incomplet",
+    score,
+    scoreLabel,
+    biasLabel: market.action,
+    setup,
+    timeframe: confirmation.timeframe,
+    zone: zones.primary,
+    liquidity: zones.targetLiquidity,
+    blockingReason: valid ? "Aucun" : missingReason,
+    confirmationSummary: confirmation.reason,
+    reason: valid
+      ? `${direction} validé: ${market.context}, ${zones.primary}, ${confirmation.reason}.`
+      : `Setup incomplet — ${missingReason}`,
+    badges: buildSmartBadges(market, news, valid),
+    blocks: [
+      ["Météo du marché", market.valid, market.context],
+      ["Structure de marché", market.valid, market.bias === "BUY" ? "HH/HL + BOS haussier" : market.bias === "SELL" ? "LH/LL + BOS baissier" : "Structure neutre"],
+      ["Liquidité", zones.valid, zones.reason],
+      ["Order Blocks", zones.valid, zones.primary],
+      ["Confirmation d'entrée", confirmation.valid, confirmation.reason],
+      ["News économiques", news.valid, news.reason],
+    ],
+  };
+}
+
+function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session) {
+  const h1Direction = getH1Direction(market);
+  const m15Direction = getM15Direction(market, zones);
+  const h1Aligned = smartResult.direction !== "WAIT" && h1Direction.bias === smartResult.direction;
+  const h1OrderBlock = state.tick % 6 !== 1;
+  const m15Refinement = state.tick % 5 !== 3;
+  const trendline = state.tick % 4 !== 0;
+  const fibonacci = state.tick % 3 !== 1;
+  const rsi = state.tick % 5 >= 2;
+  const priceAction = confirmation.candleClose && state.tick % 6 !== 4;
+  const crtAvailable = false;
+  const crt = false;
+  const advancedConfirmations = [
+    ["Trendline", trendline, trendline ? "cassure/respect validé" : "trendline non confirmée"],
+    ["Fibonacci", fibonacci, fibonacci ? "réaction sur 61.8 %" : "zone Fibonacci non validée"],
+    ["RSI", rsi, rsi ? getRsiLabel(smartResult.direction) : "RSI neutre"],
+    ["Price Action avancée", priceAction, priceAction ? "wick rejection + momentum" : "rejet ou momentum insuffisant"],
+    ["CRT", crtAvailable && crt, crtAvailable ? "CRT validé" : "CRT en attente"],
+  ];
+  const advancedCount = advancedConfirmations.filter((item) => item[1]).length;
+  const mandatoryValid = smartResult.valid && h1Aligned && h1OrderBlock && m15Refinement;
+  const valid = mandatoryValid && advancedCount >= 2;
+  const refused = smartResult.valid && smartResult.direction !== "WAIT" && !h1Aligned;
+  const status = valid ? smartResult.direction : refused ? "SIGNAL REFUSÉ" : "ATTENTE";
+  const score = scoreGoldSetup(smartResult.score, h1Aligned, h1OrderBlock, m15Refinement, advancedCount);
+  const missingAdvanced = advancedConfirmations.filter((item) => !item[1]).map((item) => item[0]);
+  const confirmedAdvanced = advancedConfirmations.filter((item) => item[1]).map((item) => item[0]);
+  const reason = getGoldReason({
+    smartResult,
+    valid,
+    refused,
+    h1Direction,
+    h1Aligned,
+    h1OrderBlock,
+    m15Refinement,
+    advancedCount,
+    confirmedAdvanced,
+    missingAdvanced,
+  });
+
+  return {
+    id: "gold",
+    name: "TSR Gold Intelligence",
+    valid,
+    direction: valid ? smartResult.direction : "WAIT",
+    status,
+    setupState: valid ? "Setup premium" : refused ? "Signal refusé" : "Setup incomplet",
+    score,
+    scoreLabel: score >= 90 ? "setup premium" : score >= 75 ? "setup avancé possible" : score >= 60 ? "attente" : "pas de trade",
+    biasLabel: refused ? "Tendance contraire" : valid ? "Confluence forte" : "Attente avancée",
+    setup: valid ? smartResult.setup : buildSetup("WAIT", zones, confirmation),
+    timeframe: valid ? smartResult.timeframe : "H1 + M15",
+    zone: h1OrderBlock ? `Order Block H1 ${smartResult.direction === "SELL" ? "bearish" : "bullish"}` : "Order Block H1 absent",
+    liquidity: smartResult.liquidity,
+    h1Direction: h1Direction.label,
+    m15Direction: m15Direction.label,
+    blockingReason: valid ? "Aucun" : reason,
+    confirmationSummary: confirmedAdvanced.length ? confirmedAdvanced.join(", ") : "Aucune confirmation avancée",
+    reason,
+    badges: buildGoldBadges(valid, refused, news, market, h1Aligned, advancedCount),
+    blocks: [
+      ["Mode 1 valide", smartResult.valid, smartResult.valid ? `${smartResult.status} Mode 1 confirmé` : smartResult.blockingReason],
+      ["Direction H1 obligatoire", h1Aligned, h1Aligned ? h1Direction.label : `Tendance H1: ${h1Direction.label}`],
+      ["Order Block H1 obligatoire", h1OrderBlock, h1OrderBlock ? "OB H1 valide" : "OB H1 non validé"],
+      ["Raffinement M15 obligatoire", m15Refinement, m15Refinement ? m15Direction.label : "pas de raffinement M15"],
+      ["Confirmations avancées", advancedCount >= 2, `${advancedCount}/2 minimum: ${confirmedAdvanced.join(", ") || "aucune"}`],
+      ["CRT", true, "CRT en attente, non bloquant"],
+    ],
+  };
+}
+
+function scoreGoldSetup(smartScore, h1Aligned, h1OrderBlock, m15Refinement, advancedCount) {
+  let score = Math.round(smartScore * 0.46);
+  score += h1Aligned ? 18 : 0;
+  score += h1OrderBlock ? 12 : 0;
+  score += m15Refinement ? 12 : 0;
+  score += clamp(advancedCount, 0, 4) * 6;
+  return clamp(score, 0, 100);
+}
+
+function getGoldReason({ smartResult, valid, refused, h1Direction, h1Aligned, h1OrderBlock, m15Refinement, advancedCount, confirmedAdvanced, missingAdvanced }) {
+  if (!smartResult.valid) return `Mode 1 non valide: ${smartResult.blockingReason}`;
+  if (refused || !h1Aligned) return `Signal refusé: ${smartResult.status} contre tendance H1 ${h1Direction.label}`;
+  if (!h1OrderBlock) return `Mode 1 ${smartResult.status} valide, mais Mode 2 en attente: Order Block H1 obligatoire absent`;
+  if (!m15Refinement) return `Mode 1 ${smartResult.status} valide, mais Mode 2 en attente: pas de raffinement M15`;
+  if (advancedCount < 2) return `Mode 2 en attente: confirmations avancées insuffisantes (${missingAdvanced.join(", ")})`;
+  if (valid) return `${smartResult.status} confirmé: H1 aligné + OB H1 + raffinement M15 + ${confirmedAdvanced.join(" + ")}`;
+  return "Mode 2 en attente";
+}
+
+function getH1Direction(market) {
+  if (market.bias === "WAIT") return { bias: "WAIT", label: "H1 neutre / range" };
+  const contrary = state.tick % 7 === 0;
+  const bias = contrary ? oppositeDirection(market.bias) : market.bias;
+  return {
+    bias,
+    label: bias === "BUY" ? "H1 haussier HH/HL" : "H1 baissier LH/LL",
+  };
+}
+
+function getM15Direction(market, zones) {
+  if (!zones.valid || market.bias === "WAIT") return { bias: "WAIT", label: "M15 en attente" };
+  return {
+    bias: market.bias,
+    label: market.bias === "BUY" ? "M15 confirme la zone H1" : "M15 raffine la zone H1",
+  };
+}
+
+function getRsiLabel(direction) {
+  if (direction === "BUY") return "reprise haussière / sortie de survente";
+  if (direction === "SELL") return "rejet baissier / sortie de surachat";
+  return "RSI secondaire en attente";
+}
+
+function oppositeDirection(direction) {
+  return direction === "BUY" ? "SELL" : direction === "SELL" ? "BUY" : "WAIT";
+}
+
+function buildSmartBadges(market, news, valid) {
+  const badges = [];
+  badges.push(valid ? ["Validé", "valid"] : ["En attente", "pending"]);
+  if (!news.valid) badges.push(["Risque news", "risk"]);
+  if (market.context.includes("range")) badges.push(["Range dangereux", "risk"]);
+  if (market.valid) badges.push(["Tendance alignée", "valid"]);
+  return badges;
+}
+
+function buildGoldBadges(valid, refused, news, market, h1Aligned, advancedCount) {
+  const badges = [];
+  badges.push(valid ? ["Validé", "valid"] : refused ? ["Refusé", "refused"] : ["En attente", "pending"]);
+  if (!news.valid) badges.push(["Risque news", "risk"]);
+  if (market.context.includes("range")) badges.push(["Range dangereux", "risk"]);
+  badges.push(h1Aligned ? ["Tendance alignée", "valid"] : ["Tendance contraire", "refused"]);
+  if (advancedCount >= 2) badges.push(["Confluence forte", "valid"]);
+  return badges;
+}
+
 function buildSetup(direction, zones, confirmation) {
   if (direction === "WAIT") {
     return { entry: "--", sl: "--", tp1: "--", tp2: "--", tp3: "--" };
@@ -397,14 +597,7 @@ function getMissingReason(market, news, zones, confirmation) {
   return "Attente confirmation";
 }
 
-function renderBlocks(market, news, zones, confirmation) {
-  const blockRows = [
-    ["Météo du marché", market.valid, market.context],
-    ["News économiques", news.valid, news.reason],
-    ["Zones clés", zones.valid, zones.reason],
-    ["Confirmation d'entrée", confirmation.valid, confirmation.reason],
-  ];
-
+function renderBlocks(blockRows) {
   elements.blockChecks.innerHTML = blockRows
     .map(([label, valid, reason]) => {
       const className = valid ? "valid" : "blocked";
@@ -416,6 +609,50 @@ function renderBlocks(market, news, zones, confirmation) {
       `;
     })
     .join("");
+}
+
+function renderComparison(smartResult, goldResult) {
+  if (!state.showBothAnalyses) {
+    elements.compareResults.innerHTML = "";
+    elements.compareResults.classList.remove("visible");
+    return;
+  }
+
+  elements.compareResults.classList.add("visible");
+  elements.compareResults.innerHTML = [smartResult, goldResult]
+    .map(
+      (result) => `
+        <article class="mini-analysis-card">
+          <div class="mini-card-head">
+            <strong>${result.name}</strong>
+            <span class="mini-status" style="color:${getStatusColor(result.status)}">${result.status}</span>
+          </div>
+          <div class="mini-score">
+            <span>${result.scoreLabel}</span>
+            <strong>${result.score}/100</strong>
+          </div>
+          <p>${result.reason}</p>
+          <dl>
+            <div><dt>Zone</dt><dd>${result.zone}</dd></div>
+            <div><dt>Liquidité</dt><dd>${result.liquidity}</dd></div>
+            <div><dt>Confirmation</dt><dd>${result.confirmationSummary}</dd></div>
+          </dl>
+          <div class="badge-row">${result.badges.map(renderBadge).join("")}</div>
+        </article>
+      `,
+    )
+    .join("");
+}
+
+function renderBadge([label, type]) {
+  return `<span class="status-badge ${type}">${label}</span>`;
+}
+
+function getStatusColor(status) {
+  if (status === "BUY") return "var(--green)";
+  if (status === "SELL") return "var(--red)";
+  if (status === "SIGNAL REFUSÉ") return "var(--red)";
+  return "var(--gold)";
 }
 
 function renderScenarios(market, zones, confirmation, session) {

@@ -232,6 +232,53 @@ button:active {
   gap: 8px;
 }
 
+.mode-picker {
+  display: grid;
+  gap: 9px;
+  margin: 13px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.mode-picker h3 {
+  margin: 0;
+  color: var(--gold);
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.mode-option,
+.compare-toggle {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 9px;
+  align-items: start;
+  min-height: 34px;
+  color: #dcd6c8;
+}
+
+.mode-option input,
+.compare-toggle input {
+  margin-top: 3px;
+  accent-color: var(--gold);
+}
+
+.mode-option strong {
+  display: block;
+  font-size: 0.86rem;
+}
+
+.mode-option small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.25;
+}
+
 .range-control {
   display: grid;
   gap: 10px;
@@ -474,6 +521,15 @@ button:active {
   text-transform: uppercase;
 }
 
+.active-mode-label {
+  display: block;
+  margin-top: 10px;
+  color: var(--gold);
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
 .signal-card h3 {
   margin: 13px 0 8px;
   font-size: clamp(2rem, 5vw, 3.25rem);
@@ -485,6 +541,114 @@ button:active {
   margin: 0 0 15px;
   color: #cfc7b5;
   font-size: 0.92rem;
+}
+
+.badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 24px;
+  margin-bottom: 12px;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.status-badge.valid {
+  border-color: rgba(70, 209, 123, 0.5);
+  background: rgba(70, 209, 123, 0.1);
+  color: var(--green);
+}
+
+.status-badge.pending {
+  border-color: rgba(231, 184, 78, 0.5);
+  background: rgba(231, 184, 78, 0.1);
+  color: var(--gold);
+}
+
+.status-badge.refused,
+.status-badge.risk {
+  border-color: rgba(239, 98, 98, 0.55);
+  background: rgba(239, 98, 98, 0.1);
+  color: var(--red);
+}
+
+.compare-results {
+  display: none;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin: 13px;
+}
+
+.compare-results.visible {
+  display: grid;
+}
+
+.mini-analysis-card {
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.022);
+}
+
+.mini-card-head,
+.mini-score {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mini-card-head strong,
+.mini-status {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.mini-status {
+  font-weight: 900;
+  text-align: right;
+}
+
+.mini-score {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.mini-analysis-card p {
+  margin: 10px 0;
+  color: #d5cebf;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.mini-analysis-card dl {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+
+.mini-analysis-card dt {
+  color: var(--muted);
+  font-size: 0.66rem;
+  text-transform: uppercase;
+}
+
+.mini-analysis-card dd {
+  margin: 2px 0 0;
+  color: var(--text);
+  font-size: 0.75rem;
 }
 
 .score-meter {
