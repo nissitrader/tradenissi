@@ -46,12 +46,14 @@ Si `/replay` et `/history` repondent correctement mais sans bougies pour la date
 - Indicateurs Smart Money activables: Order Blocks, FVG, Equal High/Low, Liquidity Sweep, BOS, ChoCH, trendlines, sessions, previous high/low et zones d'entrée.
 - Indicateurs classiques activables séparément: EMA 20, EMA 50, EMA 200, VWAP, SuperTrend, Volume et RSI 14 avec niveaux 30/50/70.
 - Tableau de décision avec score 0-100, blocs de validation, raison exacte d'attente et niveaux de setup.
+- Candle Scanner avec analyse corps/meches/volume, detection impulsion/rejet/engulfing/pin bar/displacement, score Candle Quality 0-100 et filtre anti-signaux faibles.
 - Deux modes d'analyse cliquables:
   - TSR Smart Money: analyse rapide et réactive.
   - TSR Gold Intelligence: couche stricte au-dessus du Mode 1 avec H1, OB H1, raffinement M15 et confirmations avancées.
 - Option pour afficher les deux analyses côte à côte.
 - Mode Replay historique avec date, timeframe, Play/Pause, avance/recul bougie, vitesse x1/x2/x5/x10 et journal des signaux.
 - Le replay analyse uniquement les bougies déjà révélées à l'instant rejoué, sans utiliser les bougies futures.
+- Le journal replay conserve aussi le Candle Quality et le resume de la reaction bougie au moment du signal.
 - Chargement quotidien des news USD critiques via cache local quand le flux public est disponible.
 
 ## Note technique

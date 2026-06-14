@@ -103,6 +103,12 @@ const elements = {
   h1Direction: document.getElementById("h1Direction"),
   m15Direction: document.getElementById("m15Direction"),
   confirmationSummary: document.getElementById("confirmationSummary"),
+  candleQuality: document.getElementById("candleQuality"),
+  candleType: document.getElementById("candleType"),
+  candleRejection: document.getElementById("candleRejection"),
+  wickStrength: document.getElementById("wickStrength"),
+  bodyStrength: document.getElementById("bodyStrength"),
+  volumeStrength: document.getElementById("volumeStrength"),
   scenarioList: document.getElementById("scenarioList"),
   replayJournal: document.getElementById("replayJournal"),
 };
@@ -554,8 +560,8 @@ function evaluateReplayAndRender() {
   state.tick = state.replay.index;
   state.basePrice = context.last.close;
 
-  const smartResult = buildSmartMoneyAnalysis(context.session, context.market, context.news, context.zones, context.confirmation);
-  const goldResult = buildGoldIntelligenceAnalysis(smartResult, context.market, context.news, context.zones, context.confirmation, context.session);
+  const smartResult = buildSmartMoneyAnalysis(context.session, context.market, context.news, context.zones, context.confirmation, context.candleScan);
+  const goldResult = buildGoldIntelligenceAnalysis(smartResult, context.market, context.news, context.zones, context.confirmation, context.session, context.candleScan);
   const activeResult = state.analysisMode === "gold" ? goldResult : smartResult;
   const rsi = getReplayRsi(visibleCandles, activeResult.direction);
 
@@ -590,6 +596,7 @@ function evaluateReplayAndRender() {
   renderScenarios(context.market, context.zones, context.confirmation, context.session);
   clearStrategyOverlay();
   renderRsiPanel(rsi);
+  renderCandleScanner(context.candleScan);
   drawReplayChart(visibleCandles, context, activeResult);
   updateReplayJournal(activeResult, context, visibleCandles);
 }
@@ -612,9 +619,15 @@ function buildReplayContext(candles) {
   const bullishReaction = last.close > last.open && last.close > candles[Math.max(0, candles.length - 2)].close;
   const bearishReaction = last.close < last.open && last.close < candles[Math.max(0, candles.length - 2)].close;
   const choch = bias === "BUY" ? last.close > previousHigh - range * 0.08 : bias === "SELL" ? last.close < previousLow + range * 0.08 : false;
-  const confirmationValid = bias === "BUY" ? bullishReaction && choch : bias === "SELL" ? bearishReaction && choch : false;
+  const candleScan = buildCandleScan(candles, bias);
+  const confirmationValid = bias === "BUY" ? bullishReaction && choch && candleScan.valid : bias === "SELL" ? bearishReaction && choch && candleScan.valid : false;
   const session = getSessionFromTime(last.time);
   const zoneLabel = bias === "SELL" ? "Replay H1 bearish order block + EQH" : "Replay M15 bullish order block + FVG";
+  const confirmationReason = confirmationValid
+    ? `ChoCH/BOS + ${candleScan.summary}`
+    : !candleScan.valid
+      ? `Candle Quality insuffisante: ${candleScan.weakReasons.join(", ") || candleScan.summary}`
+      : "Setup incomplet — attente confirmation";
 
   return {
     first,
@@ -643,10 +656,11 @@ function buildReplayContext(candles) {
     confirmation: {
       valid: bias !== "WAIT" && confirmationValid,
       timeframe: getReplayTimeframeLabel(state.replay.timeframe),
-      reason: confirmationValid ? "ChoCH/BOS confirmé sur bougie visible" : "Setup incomplet — attente confirmation",
+      reason: confirmationReason,
       choch,
       candleClose: true,
     },
+    candleScan,
     high,
     low,
     previousHigh,
@@ -855,6 +869,8 @@ function updateReplayJournal(activeResult, context, visibleCandles) {
     tp: activeResult.setup.tp1,
     result: "En attente",
     reason: activeResult.reason,
+    candleQuality: context.candleScan.quality,
+    candleSummary: context.candleScan.summary,
   });
   postApiLog({
     type: "replay-signal",
@@ -865,6 +881,8 @@ function updateReplayJournal(activeResult, context, visibleCandles) {
     sl: activeResult.setup.sl,
     tp: activeResult.setup.tp1,
     reason: activeResult.reason,
+    candleQuality: context.candleScan.quality,
+    candleSummary: context.candleScan.summary,
   });
   renderReplayJournal();
 }
@@ -917,6 +935,8 @@ function renderReplayJournal() {
           <strong><span>${formatReplayTime(entry.time)}</span><span>${entry.direction}</span></strong>
           <span>${entry.mode} · Entrée ${entry.entry} · SL ${entry.sl} · TP ${entry.tp}</span>
           <span>Résultat: ${entry.result}</span>
+          <span>Candle Quality: ${entry.candleQuality}/100</span>
+          <small>${entry.candleSummary}</small>
           <small>${entry.reason}</small>
         </article>
       `,
@@ -1003,6 +1023,244 @@ function parsePrice(value) {
   return Number(String(value).replace(/,/g, ""));
 }
 
+function scanCandle(candles, index = candles.length - 1) {
+  const candle = candles[index];
+  if (!candle) return null;
+  const previous = candles[index - 1] || null;
+  const previousSet = candles.slice(Math.max(0, index - 20), index);
+  const range = Math.max(0.0001, candle.high - candle.low);
+  const body = Math.abs(candle.close - candle.open);
+  const upperWick = Math.max(0, candle.high - Math.max(candle.open, candle.close));
+  const lowerWick = Math.max(0, Math.min(candle.open, candle.close) - candle.low);
+  const bodyRatio = body / range;
+  const upperWickRatio = upperWick / range;
+  const lowerWickRatio = lowerWick / range;
+  const closePosition = (candle.close - candle.low) / range;
+  const averageVolume = previousSet.length ? average(previousSet.map((item) => item.volume || 0)) : candle.volume || 0;
+  const relativeVolume = averageVolume > 0 ? (candle.volume || 0) / averageVolume : 1;
+  const direction = bodyRatio < 0.16 ? "doji" : candle.close > candle.open ? "bullish" : "bearish";
+  const previousBodyHigh = previous ? Math.max(previous.open, previous.close) : 0;
+  const previousBodyLow = previous ? Math.min(previous.open, previous.close) : 0;
+  const bodyHigh = Math.max(candle.open, candle.close);
+  const bodyLow = Math.min(candle.open, candle.close);
+  const bullishEngulfing = Boolean(previous && direction === "bullish" && previous.close < previous.open && bodyHigh >= previousBodyHigh && bodyLow <= previousBodyLow);
+  const bearishEngulfing = Boolean(previous && direction === "bearish" && previous.close > previous.open && bodyHigh >= previousBodyHigh && bodyLow <= previousBodyLow);
+  const bullishImpulse = direction === "bullish" && bodyRatio >= 0.55 && closePosition >= 0.72 && relativeVolume >= 1.04;
+  const bearishImpulse = direction === "bearish" && bodyRatio >= 0.55 && closePosition <= 0.28 && relativeVolume >= 1.04;
+  const bullishRejection = lowerWickRatio >= 0.42 && closePosition >= 0.62 && direction !== "bearish";
+  const bearishRejection = upperWickRatio >= 0.42 && closePosition <= 0.38 && direction !== "bullish";
+  const pinBar = Math.max(upperWickRatio, lowerWickRatio) >= 0.58 && bodyRatio <= 0.32;
+  const wickRejection = bullishRejection || bearishRejection || pinBar;
+  const volumeSpike = relativeVolume >= 1.28;
+  const displacement = bodyRatio >= 0.62 && relativeVolume >= 1.12;
+  const indecision = direction === "doji" || (upperWickRatio >= 0.34 && lowerWickRatio >= 0.34);
+  const tooSmall = previousSet.length >= 8 && range < average(previousSet.slice(-8).map((item) => item.high - item.low)) * 0.52;
+
+  return {
+    ...candle,
+    totalSize: range,
+    bodySize: body,
+    upperWick,
+    lowerWick,
+    bodyRatio,
+    upperWickRatio,
+    lowerWickRatio,
+    closePosition,
+    direction,
+    closeStrength: closePosition >= 0.72 ? "close proche du high" : closePosition <= 0.28 ? "close proche du low" : "clôture neutre",
+    averageVolume,
+    relativeVolume,
+    detections: {
+      bullishImpulse,
+      bearishImpulse,
+      bullishRejection,
+      bearishRejection,
+      doji: direction === "doji",
+      bullishEngulfing,
+      bearishEngulfing,
+      pinBar,
+      wickRejection,
+      volumeSpike,
+      displacement,
+      indecision,
+      tooSmall,
+    },
+  };
+}
+
+function buildCandleScan(candles, preferredDirection = "WAIT") {
+  const scanned = candles.map((_, index) => scanCandle(candles, index)).filter(Boolean);
+  const current = scanned[scanned.length - 1];
+  if (!current) return buildEmptyCandleScan();
+
+  const recent = scanned.slice(-8);
+  const dojiCount = recent.filter((item) => item.detections.doji || item.detections.indecision).length;
+  const rangeSet = scanned.slice(-12);
+  const averageRange = average(rangeSet.map((item) => item.totalSize));
+  const currentRange = current.totalSize || averageRange || 1;
+  const compression = rangeSet.length >= 8 && currentRange < averageRange * 0.58;
+  const lowVolume = current.relativeVolume < 0.72;
+  const unclearClose = current.closePosition > 0.38 && current.closePosition < 0.62;
+  const twoSidedWicks = current.upperWickRatio > 0.32 && current.lowerWickRatio > 0.32;
+  const buyReaction = current.detections.bullishRejection || current.detections.bullishImpulse || current.detections.bullishEngulfing;
+  const sellReaction = current.detections.bearishRejection || current.detections.bearishImpulse || current.detections.bearishEngulfing;
+  const alignedReaction = preferredDirection === "BUY" ? buyReaction : preferredDirection === "SELL" ? sellReaction : buyReaction || sellReaction;
+  const premium = current.detections.displacement || current.detections.volumeSpike;
+  const weakReasons = [];
+  if (current.detections.tooSmall) weakReasons.push("bougie trop petite");
+  if (dojiCount >= 3) weakReasons.push("doji répétitifs");
+  if (lowVolume) weakReasons.push("volume trop faible");
+  if (twoSidedWicks) weakReasons.push("mèches longues des deux côtés");
+  if (compression) weakReasons.push("marché compressé");
+  if (unclearClose) weakReasons.push("aucune clôture claire");
+
+  let quality = 18;
+  quality += clamp(Math.round(current.bodyRatio * 30), 0, 30);
+  quality += clamp(Math.round(Math.max(current.upperWickRatio, current.lowerWickRatio) * 22), 0, 22);
+  quality += current.closePosition >= 0.72 || current.closePosition <= 0.28 ? 14 : 4;
+  quality += clamp(Math.round((current.relativeVolume - 0.75) * 22), -8, 20);
+  if (alignedReaction) quality += 12;
+  if (premium) quality += 8;
+  quality -= weakReasons.length * 10;
+  quality = clamp(Math.round(quality), 0, 100);
+
+  const type = getCandleType(current);
+  const rejectionDirection = current.detections.bullishRejection ? "Rejet haussier" : current.detections.bearishRejection ? "Rejet baissier" : "Rejet non confirmé";
+  const validForDirection =
+    preferredDirection === "BUY"
+      ? quality >= 61 && buyReaction && current.closePosition >= 0.6 && !lowVolume && !compression
+      : preferredDirection === "SELL"
+        ? quality >= 61 && sellReaction && current.closePosition <= 0.4 && !lowVolume && !compression
+        : quality >= 61 && alignedReaction;
+
+  return {
+    current,
+    quality,
+    qualityLabel: getCandleQualityLabel(quality),
+    type,
+    rejectionDirection,
+    wickStrength: Math.round(Math.max(current.upperWickRatio, current.lowerWickRatio) * 100),
+    bodyStrength: Math.round(current.bodyRatio * 100),
+    volumeStrength: Math.round((current.relativeVolume - 1) * 100),
+    valid: validForDirection && weakReasons.length <= 1,
+    weakReasons,
+    summary: buildCandleSummary(current, type, rejectionDirection, quality),
+    mtf: buildCandleMtf(scanned, preferredDirection),
+  };
+}
+
+function buildEmptyCandleScan() {
+  return {
+    current: null,
+    quality: 0,
+    qualityLabel: "bougie faible",
+    type: "Aucune bougie",
+    rejectionDirection: "Rejet non confirmé",
+    wickStrength: 0,
+    bodyStrength: 0,
+    volumeStrength: 0,
+    valid: false,
+    weakReasons: ["aucune bougie exploitable"],
+    summary: "Aucune bougie exploitable.",
+    mtf: {
+      h1: { label: "H1", quality: 0, valid: false, direction: "WAIT" },
+      m15: { label: "M15", quality: 0, valid: false, direction: "WAIT" },
+      entry: { label: "M5/M1/30s", quality: 0, valid: false, direction: "WAIT" },
+    },
+  };
+}
+
+function getCandleType(scan) {
+  if (scan.detections.displacement) return "Displacement candle";
+  if (scan.detections.bullishEngulfing) return "Engulfing bullish";
+  if (scan.detections.bearishEngulfing) return "Engulfing bearish";
+  if (scan.detections.bullishImpulse) return "Bougie d'impulsion haussière";
+  if (scan.detections.bearishImpulse) return "Bougie d'impulsion baissière";
+  if (scan.detections.bullishRejection) return "Bougie de rejet haussier";
+  if (scan.detections.bearishRejection) return "Bougie de rejet baissier";
+  if (scan.detections.pinBar) return "Pin bar";
+  if (scan.detections.doji) return "Doji / indécision";
+  if (scan.detections.wickRejection) return "Wick rejection";
+  return scan.direction === "bullish" ? "Bougie haussière" : scan.direction === "bearish" ? "Bougie baissière" : "Bougie neutre";
+}
+
+function getCandleQualityLabel(score) {
+  if (score >= 81) return "bougie premium";
+  if (score >= 61) return "bougie forte";
+  if (score >= 31) return "bougie moyenne";
+  return "bougie faible";
+}
+
+function buildCandleSummary(scan, type, rejectionDirection, quality) {
+  const wickLabel = scan.upperWickRatio >= scan.lowerWickRatio ? `mèche haute ${Math.round(scan.upperWickRatio * 100)} %` : `mèche basse ${Math.round(scan.lowerWickRatio * 100)} %`;
+  const volumeLabel = scan.relativeVolume >= 1 ? `volume +${Math.round((scan.relativeVolume - 1) * 100)} %` : `volume ${Math.round((scan.relativeVolume - 1) * 100)} %`;
+  return `${type} détectée : ${wickLabel}, ${scan.closeStrength}, ${volumeLabel}. Candle Quality ${quality}/100.`;
+}
+
+function buildCandleMtf(scanned, preferredDirection) {
+  return {
+    h1: summarizeCandleFrame(scanned.slice(-60), preferredDirection, "H1"),
+    m15: summarizeCandleFrame(scanned.slice(-24), preferredDirection, "M15"),
+    entry: summarizeCandleFrame(scanned.slice(-8), preferredDirection, "M5/M1/30s"),
+  };
+}
+
+function summarizeCandleFrame(items, preferredDirection, label) {
+  if (!items.length) return { label, quality: 0, valid: false, direction: "WAIT" };
+  const bullish = items.filter((item) => item.direction === "bullish").length;
+  const bearish = items.filter((item) => item.direction === "bearish").length;
+  const direction = bullish > bearish ? "BUY" : bearish > bullish ? "SELL" : "WAIT";
+  const quality = Math.round(average(items.slice(-5).map((item) => Math.round(item.bodyRatio * 55 + Math.max(item.upperWickRatio, item.lowerWickRatio) * 25 + Math.min(item.relativeVolume, 1.8) * 12))));
+  return {
+    label,
+    quality: clamp(quality, 0, 100),
+    valid: preferredDirection === "WAIT" ? quality >= 50 : direction === preferredDirection && quality >= 48,
+    direction,
+  };
+}
+
+function buildLiveCandles(market) {
+  const candles = [];
+  let price = state.basePrice - Math.sin((state.tick + 12) / 5) * 8;
+  for (let index = 0; index < 80; index += 1) {
+    const phase = state.tick + index;
+    const directionalPull = market.bias === "BUY" ? 0.34 : market.bias === "SELL" ? -0.34 : 0;
+    const impulse = Math.sin(phase / 3.7) * 0.95 + directionalPull;
+    const open = price;
+    const close = open + impulse + Math.cos(phase / 5) * 0.42;
+    const high = Math.max(open, close) + 0.55 + Math.abs(Math.sin(phase / 2.4)) * 1.55;
+    const low = Math.min(open, close) - 0.55 - Math.abs(Math.cos(phase / 2.9)) * 1.55;
+    const volume = Math.round(900 + Math.abs(Math.sin(phase / 4)) * 1700 + (phase % 11 === 0 ? 900 : 0));
+    candles.push({ time: new Date(Date.now() - (80 - index) * 60 * 1000), open, high, low, close, volume });
+    price = close;
+  }
+  if (market.valid && state.tick % 5 >= 2) {
+    const last = candles[candles.length - 1];
+    const previousClose = candles[candles.length - 2]?.close || last.close;
+    const averageVolume = average(candles.slice(-20).map((item) => item.volume));
+    if (market.bias === "BUY") {
+      last.open = previousClose - 0.45;
+      last.low = last.open - 3.15;
+      last.close = last.open + 2.75;
+      last.high = last.close + 0.42;
+    }
+    if (market.bias === "SELL") {
+      last.open = previousClose + 0.45;
+      last.high = last.open + 3.15;
+      last.close = last.open - 2.75;
+      last.low = last.close - 0.42;
+    }
+    last.volume = Math.round(averageVolume * 1.42);
+  }
+  return candles;
+}
+
+function average(values) {
+  const filtered = values.filter(Number.isFinite);
+  if (!filtered.length) return 0;
+  return filtered.reduce((sum, value) => sum + value, 0) / filtered.length;
+}
+
 async function loadDailyNews() {
   const todayKey = new Date().toISOString().slice(0, 10);
   const cacheKey = "xauusd-news-cache";
@@ -1047,10 +1305,11 @@ function evaluateAndRender() {
   const market = getMarketWeather();
   const news = getNewsRisk();
   const zones = getKeyZones(market);
-  const confirmation = getEntryConfirmation(market, zones);
+  const candleScan = buildCandleScan(buildLiveCandles(market), market.bias);
+  const confirmation = getEntryConfirmation(market, zones, candleScan);
   const rsi = getRsiConfirmation(market.bias);
-  const smartResult = buildSmartMoneyAnalysis(session, market, news, zones, confirmation);
-  const goldResult = buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session);
+  const smartResult = buildSmartMoneyAnalysis(session, market, news, zones, confirmation, candleScan);
+  const goldResult = buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session, candleScan);
   const activeResult = state.analysisMode === "gold" ? goldResult : smartResult;
 
   elements.sessionName.textContent = session.name;
@@ -1083,6 +1342,7 @@ function evaluateAndRender() {
   renderScenarios(market, zones, confirmation, session);
   renderStrategyOverlay(activeResult.direction, zones, confirmation);
   renderRsiPanel(rsi);
+  renderCandleScanner(candleScan);
 }
 
 function getSession() {
@@ -1155,36 +1415,40 @@ function getKeyZones(market) {
   };
 }
 
-function getEntryConfirmation(market, zones) {
+function getEntryConfirmation(market, zones, candleScan) {
   const confirmationCycle = state.tick % 5;
   const choch = confirmationCycle >= 2;
   const candleClose = confirmationCycle !== 4;
-  const valid = market.valid && zones.valid && choch && candleClose;
+  const candleValid = candleScan.valid;
+  const valid = market.valid && zones.valid && choch && candleClose && candleValid;
 
   return {
     valid,
     timeframe: state.intervalLabel === "H4" || state.intervalLabel === "H1" ? "M5" : state.intervalLabel,
-    reason: valid ? "ChoCH + clôture de bougie de confirmation" : !choch ? "Order Block détecté mais pas de ChoCH" : "Pas de confirmation bougie",
+    reason: valid ? `ChoCH + clôture claire + ${candleScan.summary}` : !choch ? "Order Block détecté mais pas de ChoCH" : !candleClose ? "Pas de confirmation bougie" : `Candle Quality insuffisante: ${candleScan.weakReasons.join(", ") || candleScan.summary}`,
     choch,
     candleClose,
+    candleValid,
   };
 }
 
-function scoreSetup(market, news, zones, confirmation) {
+function scoreSetup(market, news, zones, confirmation, candleScan) {
   let score = 0;
-  score += clamp(market.score, 0, 34);
+  score += clamp(market.score, 0, 30);
   score += news.score;
-  score += zones.valid ? 24 : zones.liquidityTaken ? 14 : 8;
-  score += confirmation.valid ? 24 : confirmation.choch ? 15 : 6;
+  score += zones.valid ? 22 : zones.liquidityTaken ? 13 : 7;
+  score += confirmation.valid ? 18 : confirmation.choch ? 12 : 5;
+  score += clamp(Math.round(candleScan.quality * 0.18), 0, 18);
+  if (!candleScan.valid) score -= 14;
   return clamp(Math.round(score), 0, 100);
 }
 
-function buildSmartMoneyAnalysis(session, market, news, zones, confirmation) {
-  const score = scoreSetup(market, news, zones, confirmation);
-  const valid = market.valid && news.valid && zones.valid && confirmation.valid;
+function buildSmartMoneyAnalysis(session, market, news, zones, confirmation, candleScan) {
+  const score = scoreSetup(market, news, zones, confirmation, candleScan);
+  const valid = market.valid && news.valid && zones.valid && confirmation.valid && candleScan.valid;
   const direction = valid ? market.bias : "WAIT";
   const setup = buildSetup(direction, zones, confirmation);
-  const missingReason = getMissingReason(market, news, zones, confirmation);
+  const missingReason = getMissingReason(market, news, zones, confirmation, candleScan);
   const scoreLabel = score >= 85 ? "setup fort" : score >= 70 ? "signal possible" : score >= 50 ? "attente" : "pas de trade";
 
   return {
@@ -1204,21 +1468,22 @@ function buildSmartMoneyAnalysis(session, market, news, zones, confirmation) {
     blockingReason: valid ? "Aucun" : missingReason,
     confirmationSummary: confirmation.reason,
     reason: valid
-      ? `${direction} validé: ${market.context}, ${zones.primary}, ${confirmation.reason}.`
+      ? `${direction} validé: ${market.context}, ${zones.primary}, ${confirmation.reason}`
       : `Setup incomplet — ${missingReason}`,
-    badges: buildSmartBadges(market, news, valid),
+    badges: buildSmartBadges(market, news, valid, candleScan),
     blocks: [
       ["Météo du marché", market.valid, market.context],
       ["Structure de marché", market.valid, market.bias === "BUY" ? "HH/HL + BOS haussier" : market.bias === "SELL" ? "LH/LL + BOS baissier" : "Structure neutre"],
       ["Liquidité", zones.valid, zones.reason],
       ["Order Blocks", zones.valid, zones.primary],
       ["Confirmation d'entrée", confirmation.valid, confirmation.reason],
+      ["Candle Scanner", candleScan.valid, `${candleScan.quality}/100 · ${candleScan.summary}`],
       ["News économiques", news.valid, news.reason],
     ],
   };
 }
 
-function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session) {
+function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session, candleScan) {
   const h1Direction = getH1Direction(market);
   const m15Direction = getM15Direction(market, zones);
   const h1Aligned = smartResult.direction !== "WAIT" && h1Direction.bias === smartResult.direction;
@@ -1228,14 +1493,15 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
   const fibonacci = state.tick % 3 !== 1;
   const rsiConfirmation = getRsiConfirmation(smartResult.direction);
   const rsi = rsiConfirmation.valid;
-  const priceAction = confirmation.candleClose && state.tick % 6 !== 4;
+  const priceAction = confirmation.candleClose && candleScan.valid && state.tick % 6 !== 4;
   const crtAvailable = false;
   const crt = false;
   const advancedConfirmations = [
     ["Trendline", trendline, trendline ? "cassure/respect validé" : "trendline non confirmée"],
     ["Fibonacci", fibonacci, fibonacci ? "réaction sur 61.8 %" : "zone Fibonacci non validée"],
     ["RSI", rsi, rsiConfirmation.label],
-    ["Price Action avancée", priceAction, priceAction ? "wick rejection + momentum" : "rejet ou momentum insuffisant"],
+    ["Price Action avancée", priceAction, priceAction ? candleScan.summary : "rejet ou momentum insuffisant"],
+    ["Candle Quality", candleScan.quality >= 70, `${candleScan.quality}/100 · ${candleScan.qualityLabel}`],
     ["CRT", crtAvailable && crt, crtAvailable ? "CRT validé" : "CRT en attente"],
   ];
   const advancedCount = advancedConfirmations.filter((item) => item[1]).length;
@@ -1243,7 +1509,7 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
   const valid = mandatoryValid && advancedCount >= 2;
   const refused = smartResult.valid && smartResult.direction !== "WAIT" && !h1Aligned;
   const status = valid ? smartResult.direction : refused ? "SIGNAL REFUSÉ" : "ATTENTE";
-  const score = scoreGoldSetup(smartResult.score, h1Aligned, h1OrderBlock, m15Refinement, advancedCount);
+  const score = scoreGoldSetup(smartResult.score, h1Aligned, h1OrderBlock, m15Refinement, advancedCount, candleScan.quality);
   const missingAdvanced = advancedConfirmations.filter((item) => !item[1]).map((item) => item[0]);
   const confirmedAdvanced = advancedConfirmations.filter((item) => item[1]).map((item) => item[0]);
   const reason = getGoldReason({
@@ -1278,24 +1544,26 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
     blockingReason: valid ? "Aucun" : reason,
     confirmationSummary: confirmedAdvanced.length ? confirmedAdvanced.join(", ") : "Aucune confirmation avancée",
     reason,
-    badges: buildGoldBadges(valid, refused, news, market, h1Aligned, advancedCount),
+    badges: buildGoldBadges(valid, refused, news, market, h1Aligned, advancedCount, candleScan),
     blocks: [
       ["Mode 1 valide", smartResult.valid, smartResult.valid ? `${smartResult.status} Mode 1 confirmé` : smartResult.blockingReason],
       ["Direction H1 obligatoire", h1Aligned, h1Aligned ? h1Direction.label : `Tendance H1: ${h1Direction.label}`],
       ["Order Block H1 obligatoire", h1OrderBlock, h1OrderBlock ? "OB H1 valide" : "OB H1 non validé"],
       ["Raffinement M15 obligatoire", m15Refinement, m15Refinement ? m15Direction.label : "pas de raffinement M15"],
+      ["Candle Scanner multi-timeframe", candleScan.mtf.h1.valid && candleScan.mtf.m15.valid && candleScan.mtf.entry.valid, `H1 ${candleScan.mtf.h1.quality}/100 · M15 ${candleScan.mtf.m15.quality}/100 · Entrée ${candleScan.mtf.entry.quality}/100`],
       ["Confirmations avancées", advancedCount >= 2, `${advancedCount}/2 minimum: ${confirmedAdvanced.join(", ") || "aucune"}`],
       ["CRT", true, "CRT en attente, non bloquant"],
     ],
   };
 }
 
-function scoreGoldSetup(smartScore, h1Aligned, h1OrderBlock, m15Refinement, advancedCount) {
+function scoreGoldSetup(smartScore, h1Aligned, h1OrderBlock, m15Refinement, advancedCount, candleQuality) {
   let score = Math.round(smartScore * 0.46);
   score += h1Aligned ? 18 : 0;
   score += h1OrderBlock ? 12 : 0;
   score += m15Refinement ? 12 : 0;
-  score += clamp(advancedCount, 0, 4) * 6;
+  score += clamp(advancedCount, 0, 5) * 5;
+  score += clamp(Math.round(candleQuality * 0.1), 0, 10);
   return clamp(score, 0, 100);
 }
 
@@ -1359,22 +1627,24 @@ function oppositeDirection(direction) {
   return direction === "BUY" ? "SELL" : direction === "SELL" ? "BUY" : "WAIT";
 }
 
-function buildSmartBadges(market, news, valid) {
+function buildSmartBadges(market, news, valid, candleScan) {
   const badges = [];
   badges.push(valid ? ["Validé", "valid"] : ["En attente", "pending"]);
   if (!news.valid) badges.push(["Risque news", "risk"]);
   if (market.context.includes("range")) badges.push(["Range dangereux", "risk"]);
   if (market.valid) badges.push(["Tendance alignée", "valid"]);
+  badges.push(candleScan.valid ? [`Candle ${candleScan.quality}`, "valid"] : ["Bougie faible", "risk"]);
   return badges;
 }
 
-function buildGoldBadges(valid, refused, news, market, h1Aligned, advancedCount) {
+function buildGoldBadges(valid, refused, news, market, h1Aligned, advancedCount, candleScan) {
   const badges = [];
   badges.push(valid ? ["Validé", "valid"] : refused ? ["Refusé", "refused"] : ["En attente", "pending"]);
   if (!news.valid) badges.push(["Risque news", "risk"]);
   if (market.context.includes("range")) badges.push(["Range dangereux", "risk"]);
   badges.push(h1Aligned ? ["Tendance alignée", "valid"] : ["Tendance contraire", "refused"]);
   if (advancedCount >= 2) badges.push(["Confluence forte", "valid"]);
+  badges.push(candleScan.quality >= 81 ? ["Bougie premium", "valid"] : candleScan.valid ? ["Bougie forte", "valid"] : ["Bougie faible", "risk"]);
   return badges;
 }
 
@@ -1398,10 +1668,11 @@ function buildSetup(direction, zones, confirmation) {
   };
 }
 
-function getMissingReason(market, news, zones, confirmation) {
+function getMissingReason(market, news, zones, confirmation, candleScan) {
   if (!market.valid) return market.context === "range dangereux" ? "Marché en range dangereux" : "Météo du marché non alignée";
   if (!news.valid) return news.reason;
   if (!zones.valid) return zones.reason;
+  if (!candleScan.valid) return `Candle Quality insuffisante: ${candleScan.weakReasons.join(", ") || candleScan.summary}`;
   if (!confirmation.valid) return confirmation.reason;
   return "Attente confirmation";
 }
@@ -1418,6 +1689,15 @@ function renderBlocks(blockRows) {
       `;
     })
     .join("");
+}
+
+function renderCandleScanner(candleScan) {
+  elements.candleQuality.textContent = `${candleScan.quality}/100 · ${candleScan.qualityLabel}`;
+  elements.candleType.textContent = candleScan.type;
+  elements.candleRejection.textContent = `${candleScan.rejectionDirection} · ${candleScan.summary}`;
+  elements.wickStrength.textContent = `${candleScan.wickStrength}%`;
+  elements.bodyStrength.textContent = `${candleScan.bodyStrength}%`;
+  elements.volumeStrength.textContent = `${candleScan.volumeStrength >= 0 ? "+" : ""}${candleScan.volumeStrength}% vs moyenne 20 bougies`;
 }
 
 function renderComparison(smartResult, goldResult) {
