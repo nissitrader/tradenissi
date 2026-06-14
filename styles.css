@@ -245,10 +245,23 @@ button:active {
 
 .checkbox-list {
   display: grid;
-  gap: 9px;
+  gap: 14px;
   max-height: calc(100vh - 385px);
   overflow: auto;
   padding-right: 5px;
+}
+
+.indicator-group {
+  display: grid;
+  gap: 9px;
+}
+
+.indicator-group h3 {
+  margin: 0;
+  color: var(--gold);
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 .check-row {
@@ -399,6 +412,37 @@ button:active {
   height: 2px;
   padding: 0;
   border-radius: 999px;
+}
+
+.overlay-ema,
+.overlay-supertrend {
+  height: 3px;
+  padding: 0;
+  border-radius: 999px;
+}
+
+.overlay-ema20 {
+  border-color: rgba(59, 216, 189, 0.9);
+  background: rgba(59, 216, 189, 0.9);
+}
+
+.overlay-ema50 {
+  border-color: rgba(116, 167, 255, 0.9);
+  background: rgba(116, 167, 255, 0.9);
+}
+
+.overlay-ema200 {
+  border-color: rgba(231, 184, 78, 0.95);
+  background: rgba(231, 184, 78, 0.95);
+}
+
+.overlay-supertrend {
+  border-color: rgba(70, 209, 123, 0.95);
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(70, 209, 123, 0.95) 0 16px,
+    rgba(239, 98, 98, 0.95) 16px 32px
+  );
 }
 
 .overlay-session {

@@ -1,4 +1,4 @@
-const overlays = [
+const smartMoneyOverlays = [
   { id: "orderBlocks", label: "Order Blocks", defaultOn: true },
   { id: "fvg", label: "FVG / Imbalance", defaultOn: true },
   { id: "equalHigh", label: "Equal High", defaultOn: true },
@@ -10,14 +10,22 @@ const overlays = [
   { id: "sessions", label: "Sessions Asie / Londres / New York", defaultOn: true },
   { id: "previousHL", label: "Previous High / Previous Low", defaultOn: true },
   { id: "entryZones", label: "Zones d'entrée potentielles", defaultOn: true },
-  { id: "sltp", label: "SL / TP", defaultOn: true },
-  { id: "scenarios", label: "Scénarios actifs", defaultOn: true },
+];
+
+const classicIndicators = [
+  { id: "ema20", label: "EMA 20", defaultOn: false },
+  { id: "ema50", label: "EMA 50", defaultOn: false },
+  { id: "ema200", label: "EMA 200", defaultOn: false },
+  { id: "vwap", label: "VWAP", defaultOn: false, tradingViewStudy: "STD;VWAP" },
+  { id: "superTrend", label: "SuperTrend", defaultOn: false },
+  { id: "volume", label: "Volume", defaultOn: false, tradingViewStudy: "STD;Volume" },
 ];
 
 const state = {
   interval: "240",
   intervalLabel: "H4",
-  overlayVisibility: Object.fromEntries(overlays.map((item) => [item.id, item.defaultOn])),
+  smartMoneyVisibility: Object.fromEntries(smartMoneyOverlays.map((item) => [item.id, item.defaultOn])),
+  classicVisibility: Object.fromEntries(classicIndicators.map((item) => [item.id, item.defaultOn])),
   tick: 0,
   basePrice: 2336.4,
   widget: null,
@@ -70,7 +78,8 @@ function renderTradingView() {
     return;
   }
 
-  state.widget = new window.TradingView.widget({
+  const studies = getTradingViewStudies();
+  const config = {
     autosize: true,
     symbol: "OANDA:XAUUSD",
     interval: state.interval,
@@ -85,21 +94,45 @@ function renderTradingView() {
     calendar: false,
     support_host: "https://www.tradingview.com",
     container_id: "tradingview_chart",
-    studies: ["STD;VWAP", "STD;Volume"],
-  });
+  };
+
+  if (studies.length > 0) {
+    config.studies = studies;
+  }
+
+  state.widget = new window.TradingView.widget(config);
 }
 
 function renderOverlayControls() {
-  elements.overlayControls.innerHTML = overlays
-    .map(
-      (item) => `
+  elements.overlayControls.innerHTML = `
+    <section class="indicator-group">
+      <h3>Indicateurs Smart Money</h3>
+      ${smartMoneyOverlays
+        .map(
+          (item) => `
         <label class="check-row">
-          <input type="checkbox" data-overlay="${item.id}" ${item.defaultOn ? "checked" : ""} />
+          <input type="checkbox" data-smart-overlay="${item.id}" ${item.defaultOn ? "checked" : ""} />
           <span>${item.label}</span>
         </label>
       `,
-    )
-    .join("");
+        )
+        .join("")}
+    </section>
+
+    <section class="indicator-group">
+      <h3>Indicateurs classiques</h3>
+      ${classicIndicators
+        .map(
+          (item) => `
+        <label class="check-row">
+          <input type="checkbox" data-classic-indicator="${item.id}" ${item.defaultOn ? "checked" : ""} />
+          <span>${item.label}</span>
+        </label>
+      `,
+        )
+        .join("")}
+    </section>
+  `;
 }
 
 function bindInteractions() {
@@ -123,9 +156,19 @@ function bindInteractions() {
     });
   });
 
-  document.querySelectorAll("[data-overlay]").forEach((input) => {
+  document.querySelectorAll("[data-smart-overlay]").forEach((input) => {
     input.addEventListener("change", () => {
-      state.overlayVisibility[input.dataset.overlay] = input.checked;
+      state.smartMoneyVisibility[input.dataset.smartOverlay] = input.checked;
+      evaluateAndRender();
+    });
+  });
+
+  document.querySelectorAll("[data-classic-indicator]").forEach((input) => {
+    input.addEventListener("change", () => {
+      state.classicVisibility[input.dataset.classicIndicator] = input.checked;
+      if (input.dataset.classicIndicator === "vwap" || input.dataset.classicIndicator === "volume") {
+        renderTradingView();
+      }
       evaluateAndRender();
     });
   });
@@ -393,7 +436,8 @@ function renderScenarios(market, zones, confirmation, session) {
 }
 
 function renderStrategyOverlay(direction, zones, confirmation) {
-  const visible = state.overlayVisibility;
+  const visible = state.smartMoneyVisibility;
+  const classic = state.classicVisibility;
   const items = [];
 
   if (visible.sessions) {
@@ -414,15 +458,20 @@ function renderStrategyOverlay(direction, zones, confirmation) {
     items.push({ className: "overlay-sl overlay-line", label: "", style: "left: 10%; top: 82%; width: 78%;" });
   }
   if (visible.entryZones) items.push({ className: direction === "SELL" ? "overlay-sell" : "overlay-buy", label: "Entrée", style: "left: 58%; top: 56%; width: 14%; height: 7%;" });
-  if (visible.sltp) {
-    items.push({ className: "overlay-sl", label: "SL", style: "right: 12%; top: 18%;" });
-    items.push({ className: "overlay-tp", label: "TP", style: "right: 16%; top: 69%;" });
-  }
-  if (visible.scenarios) items.push({ className: "overlay-ob", label: zones.primary, style: "left: 8%; bottom: 9%; max-width: 260px;" });
+  if (classic.ema20) items.push({ className: "overlay-ema overlay-ema20", label: "", style: "left: 12%; top: 37%; width: 68%; transform: rotate(-7deg);" });
+  if (classic.ema50) items.push({ className: "overlay-ema overlay-ema50", label: "", style: "left: 10%; top: 48%; width: 70%; transform: rotate(-3deg);" });
+  if (classic.ema200) items.push({ className: "overlay-ema overlay-ema200", label: "", style: "left: 8%; top: 59%; width: 72%; transform: rotate(2deg);" });
+  if (classic.superTrend) items.push({ className: "overlay-supertrend", label: "", style: "left: 20%; top: 66%; width: 55%; transform: rotate(-5deg);" });
 
   elements.strategyOverlay.innerHTML = items
     .map((item) => `<span class="overlay-item ${item.className}" style="${item.style}">${item.label}</span>`)
     .join("");
+}
+
+function getTradingViewStudies() {
+  return classicIndicators
+    .filter((item) => item.tradingViewStudy && state.classicVisibility[item.id])
+    .map((item) => item.tradingViewStudy);
 }
 
 function safeJson(value) {
