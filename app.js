@@ -22,6 +22,8 @@ const classicIndicators = [
   { id: "rsi", label: "RSI", defaultOn: false },
 ];
 
+const API_UNAVAILABLE_MESSAGE = "API locale indisponible — vérifiez que votre PC, npm start et Cloudflare Tunnel sont actifs.";
+
 const state = {
   interval: "240",
   intervalLabel: "H4",
@@ -34,6 +36,13 @@ const state = {
   widget: null,
   lastNewsLoad: null,
   newsEvents: [],
+  api: {
+    available: false,
+    message: API_UNAVAILABLE_MESSAGE,
+    health: null,
+    signals: [],
+    history: [],
+  },
   replay: {
     active: false,
     playing: false,
@@ -50,6 +59,7 @@ const state = {
 
 const elements = {
   workspace: document.getElementById("workspace"),
+  apiNotice: document.getElementById("apiNotice"),
   chartFrame: document.getElementById("chartFrame"),
   overlayControls: document.getElementById("overlayControls"),
   strategyOverlay: document.getElementById("strategyOverlay"),
@@ -101,6 +111,7 @@ function boot() {
   bindInteractions();
   renderTradingView();
   loadDailyNews();
+  initTsrDataApi();
   evaluateAndRender();
   window.setInterval(evaluateAndRender, 4500);
 }
@@ -269,6 +280,133 @@ function applyLayout(layout) {
   }
 }
 
+async function initTsrDataApi() {
+  const health = await tsrDataRequest("health");
+  if (!health.ok) {
+    setApiUnavailable(health.message);
+    return;
+  }
+
+  state.api.available = true;
+  state.api.health = health.data;
+  state.api.message = "TSR Data API connectée";
+  elements.apiNotice.hidden = true;
+  await Promise.all([loadApiHistory(), loadApiSignals()]);
+}
+
+async function loadApiHistory() {
+  const data = await tsrDataRequest("history", {
+    params: {
+      symbol: "XAUUSD",
+      timeframe: state.intervalLabel,
+      limit: "500",
+    },
+  });
+  if (!data.ok) {
+    setApiUnavailable(data.message);
+    return [];
+  }
+  state.api.history = data.data.candles || [];
+  return state.api.history;
+}
+
+async function loadApiSignals() {
+  const data = await tsrDataRequest("signals");
+  if (!data.ok) {
+    setApiUnavailable(data.message);
+    return [];
+  }
+  state.api.signals = data.data.signals || [];
+  renderApiSignals();
+  return state.api.signals;
+}
+
+async function loadApiReplayCandles() {
+  const data = await tsrDataRequest("replay", {
+    params: {
+      symbol: "XAUUSD",
+      timeframe: getReplayTimeframeLabel(state.replay.timeframe),
+      date: state.replay.date,
+      limit: "2000",
+    },
+  });
+  if (!data.ok) {
+    setApiUnavailable(data.message);
+    return [];
+  }
+  return normalizeApiCandles(data.data.candles || []);
+}
+
+async function postApiLog(payload) {
+  const data = await tsrDataRequest("logs", {
+    method: "POST",
+    body: payload,
+  });
+  if (!data.ok) setApiUnavailable(data.message);
+}
+
+async function tsrDataRequest(endpoint, options = {}) {
+  const method = options.method || "GET";
+  const params = new URLSearchParams({ endpoint });
+  Object.entries(options.params || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") params.set(key, value);
+  });
+
+  try {
+    const response = await fetch(`/api/tsr-data?${params.toString()}`, {
+      method,
+      headers: { "content-type": "application/json" },
+      body: method === "POST" ? JSON.stringify(options.body || {}) : undefined,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 401) {
+      return {
+        ok: false,
+        status: 401,
+        message: data.message || "Unauthorized — vérifiez que le proxy envoie bien le header x-api-key.",
+      };
+    }
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status,
+        message: data.message || API_UNAVAILABLE_MESSAGE,
+      };
+    }
+    return { ok: true, status: response.status, data };
+  } catch {
+    return { ok: false, status: 503, message: API_UNAVAILABLE_MESSAGE };
+  }
+}
+
+function setApiUnavailable(message) {
+  state.api.available = false;
+  state.api.message = message || API_UNAVAILABLE_MESSAGE;
+  elements.apiNotice.textContent = state.api.message;
+  elements.apiNotice.hidden = false;
+}
+
+function renderApiSignals() {
+  if (!state.api.signals.length) return;
+  elements.scenarioList.innerHTML = state.api.signals
+    .slice(0, 3)
+    .map((signal) => `<article><strong>${signal.direction || signal.status || "Signal API"}</strong><span>${signal.mode || "TSR Data API"} · ${signal.reason || signal.time || "Signal externe"}</span></article>`)
+    .join("");
+}
+
+function normalizeApiCandles(candles) {
+  return candles
+    .map((candle) => ({
+      time: new Date(candle.time),
+      open: Number(candle.open),
+      high: Number(candle.high),
+      low: Number(candle.low),
+      close: Number(candle.close),
+      volume: Number(candle.volume || 0),
+    }))
+    .filter((candle) => candle.time.toString() !== "Invalid Date" && [candle.open, candle.high, candle.low, candle.close].every(Number.isFinite));
+}
+
 function initReplayDefaults() {
   const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const date = yesterday.toISOString().slice(0, 10);
@@ -296,10 +434,16 @@ function toggleReplayMode() {
   }
 }
 
-function resetReplaySession() {
+async function resetReplaySession() {
   state.replay.date = elements.replayDate.value || state.replay.date;
   state.replay.timeframe = elements.replayTimeframe.value;
-  state.replay.candles = generateReplayCandles(state.replay.date, state.replay.timeframe);
+  const apiCandles = await loadApiReplayCandles();
+  state.replay.candles = apiCandles.length ? apiCandles : [];
+  if (!state.replay.candles.length) {
+    elements.replayStatus.textContent = state.api.message || API_UNAVAILABLE_MESSAGE;
+    renderReplayJournal();
+    return;
+  }
   state.replay.index = Math.min(40, state.replay.candles.length - 1);
   state.replay.journal = [];
   state.replay.loggedKeys = new Set();
@@ -348,6 +492,11 @@ function stepReplay(delta) {
 }
 
 function evaluateReplayAndRender() {
+  if (!state.replay.candles.length) {
+    elements.replayStatus.textContent = state.api.message || API_UNAVAILABLE_MESSAGE;
+    return;
+  }
+
   const visibleCandles = state.replay.candles.slice(0, state.replay.index + 1);
   const context = buildReplayContext(visibleCandles);
   state.tick = state.replay.index;
@@ -627,6 +776,16 @@ function updateReplayJournal(activeResult, context, visibleCandles) {
     sl: activeResult.setup.sl,
     tp: activeResult.setup.tp1,
     result: "En attente",
+    reason: activeResult.reason,
+  });
+  postApiLog({
+    type: "replay-signal",
+    time: context.last.time.toISOString(),
+    mode: activeResult.name,
+    direction: activeResult.status,
+    entry: activeResult.setup.entry,
+    sl: activeResult.setup.sl,
+    tp: activeResult.setup.tp1,
     reason: activeResult.reason,
   });
   renderReplayJournal();

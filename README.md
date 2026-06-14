@@ -20,6 +20,19 @@ npm start
 
 Routes disponibles: `GET /health`, `GET /history`, `GET /replay`, `GET /signals`, `POST /logs`.
 
+## Connexion TSR Data API
+
+Le frontend Vercel passe par `/api/tsr-data`, qui ajoute la cle API cote serveur et evite d'exposer `TSR_DATA_API_KEY` dans le navigateur.
+
+Variables Vercel requises :
+
+```text
+NEXT_PUBLIC_TSR_DATA_API_URL=https://votre-tunnel-cloudflare
+TSR_DATA_API_KEY=votre-cle-locale
+```
+
+Les donnees lourdes ne sont pas stockees sur Vercel : historique, replay, signaux et logs passent par TSR Data API.
+
 ## Ce que contient la V1
 
 - Graphique TradingView `OANDA:XAUUSD` visible au centre.
