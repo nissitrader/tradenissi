@@ -19,6 +19,7 @@ const classicIndicators = [
   { id: "vwap", label: "VWAP", defaultOn: false, tradingViewStudy: "STD;VWAP" },
   { id: "superTrend", label: "SuperTrend", defaultOn: false },
   { id: "volume", label: "Volume", defaultOn: false, tradingViewStudy: "STD;Volume" },
+  { id: "rsi", label: "RSI", defaultOn: false },
 ];
 
 const state = {
@@ -39,6 +40,9 @@ const elements = {
   workspace: document.getElementById("workspace"),
   overlayControls: document.getElementById("overlayControls"),
   strategyOverlay: document.getElementById("strategyOverlay"),
+  rsiPanel: document.getElementById("rsiPanel"),
+  rsiValue: document.getElementById("rsiValue"),
+  rsiLine: document.getElementById("rsiLine"),
   chartInterval: document.getElementById("chartInterval"),
   sessionName: document.getElementById("sessionName"),
   marketBias: document.getElementById("marketBias"),
@@ -264,6 +268,7 @@ function evaluateAndRender() {
   const news = getNewsRisk();
   const zones = getKeyZones(market);
   const confirmation = getEntryConfirmation(market, zones);
+  const rsi = getRsiConfirmation(market.bias);
   const smartResult = buildSmartMoneyAnalysis(session, market, news, zones, confirmation);
   const goldResult = buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session);
   const activeResult = state.analysisMode === "gold" ? goldResult : smartResult;
@@ -297,6 +302,7 @@ function evaluateAndRender() {
   renderComparison(smartResult, goldResult);
   renderScenarios(market, zones, confirmation, session);
   renderStrategyOverlay(activeResult.direction, zones, confirmation);
+  renderRsiPanel(rsi);
 }
 
 function getSession() {
@@ -440,14 +446,15 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
   const m15Refinement = state.tick % 5 !== 3;
   const trendline = state.tick % 4 !== 0;
   const fibonacci = state.tick % 3 !== 1;
-  const rsi = state.tick % 5 >= 2;
+  const rsiConfirmation = getRsiConfirmation(smartResult.direction);
+  const rsi = rsiConfirmation.valid;
   const priceAction = confirmation.candleClose && state.tick % 6 !== 4;
   const crtAvailable = false;
   const crt = false;
   const advancedConfirmations = [
     ["Trendline", trendline, trendline ? "cassure/respect validé" : "trendline non confirmée"],
     ["Fibonacci", fibonacci, fibonacci ? "réaction sur 61.8 %" : "zone Fibonacci non validée"],
-    ["RSI", rsi, rsi ? getRsiLabel(smartResult.direction) : "RSI neutre"],
+    ["RSI", rsi, rsiConfirmation.label],
     ["Price Action avancée", priceAction, priceAction ? "wick rejection + momentum" : "rejet ou momentum insuffisant"],
     ["CRT", crtAvailable && crt, crtAvailable ? "CRT validé" : "CRT en attente"],
   ];
@@ -544,6 +551,28 @@ function getRsiLabel(direction) {
   if (direction === "BUY") return "reprise haussière / sortie de survente";
   if (direction === "SELL") return "rejet baissier / sortie de surachat";
   return "RSI secondaire en attente";
+}
+
+function getRsiConfirmation(direction) {
+  const values = Array.from({ length: 32 }, (_, index) => {
+    const wave = Math.sin((state.tick + index) / 4) * 18;
+    const pulse = Math.cos((state.tick + index) / 7) * 7;
+    return clamp(Math.round(50 + wave + pulse), 12, 88);
+  });
+  const value = values[values.length - 1];
+  const previous = values[values.length - 2];
+  const rising = value > previous;
+  const falling = value < previous;
+  const buyValid = direction === "BUY" && ((previous < 35 && value >= 35) || (value > 50 && rising));
+  const sellValid = direction === "SELL" && ((previous > 65 && value <= 65) || (value < 50 && falling));
+  const neutralValid = direction === "WAIT" ? false : buyValid || sellValid;
+
+  return {
+    value,
+    values,
+    valid: neutralValid,
+    label: neutralValid ? getRsiLabel(direction) : `RSI 14 neutre (${value})`,
+  };
 }
 
 function oppositeDirection(direction) {
@@ -703,6 +732,26 @@ function renderStrategyOverlay(direction, zones, confirmation) {
   elements.strategyOverlay.innerHTML = items
     .map((item) => `<span class="overlay-item ${item.className}" style="${item.style}">${item.label}</span>`)
     .join("");
+}
+
+function renderRsiPanel(rsi) {
+  if (!state.classicVisibility.rsi) {
+    elements.rsiPanel.hidden = true;
+    elements.rsiLine.setAttribute("points", "");
+    elements.rsiValue.textContent = "--";
+    return;
+  }
+
+  elements.rsiPanel.hidden = false;
+  elements.rsiValue.textContent = `${rsi.value}`;
+  const points = rsi.values
+    .map((value, index) => {
+      const x = (index / (rsi.values.length - 1)) * 100;
+      const y = 100 - value;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+  elements.rsiLine.setAttribute("points", points);
 }
 
 function getTradingViewStudies() {

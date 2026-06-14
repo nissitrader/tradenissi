@@ -332,7 +332,7 @@ button:active {
 
 .chart-desk {
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto 1fr auto;
   overflow: hidden;
 }
 
@@ -390,6 +390,80 @@ button:active {
   position: relative;
   min-height: 520px;
   background: #090a08;
+}
+
+.rsi-panel {
+  min-height: 142px;
+  border-top: 1px solid var(--line);
+  background: #0b0c0a;
+}
+
+.rsi-panel[hidden] {
+  display: none;
+}
+
+.rsi-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  height: 34px;
+  padding: 0 12px;
+  color: #dcd6c8;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.rsi-head span {
+  color: var(--gold);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 800;
+}
+
+.rsi-plot {
+  position: relative;
+  height: 108px;
+  border-top: 1px solid rgba(238, 232, 207, 0.07);
+  background:
+    linear-gradient(to bottom, transparent 29%, rgba(239, 98, 98, 0.16) 30%, transparent 31%),
+    linear-gradient(to bottom, transparent 49%, rgba(238, 232, 207, 0.16) 50%, transparent 51%),
+    linear-gradient(to bottom, transparent 69%, rgba(70, 209, 123, 0.15) 70%, transparent 71%);
+}
+
+.rsi-level {
+  position: absolute;
+  right: 8px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+}
+
+.level-70 {
+  top: 26%;
+}
+
+.level-50 {
+  top: 46%;
+}
+
+.level-30 {
+  top: 66%;
+}
+
+.rsi-plot svg {
+  position: absolute;
+  inset: 0 34px 0 0;
+  width: calc(100% - 34px);
+  height: 100%;
+}
+
+#rsiLine {
+  fill: none;
+  stroke: var(--gold);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.4;
+  filter: drop-shadow(0 0 6px rgba(231, 184, 78, 0.4));
 }
 
 #tradingview_chart {

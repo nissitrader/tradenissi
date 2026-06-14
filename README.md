@@ -13,7 +13,7 @@ Ouvrir `index.html` dans un navigateur moderne.
 - Timeframes H4, H1, M30, M15, M5, M1 et 30s.
 - Panneaux modulables, mode graphique large et plein écran.
 - Indicateurs Smart Money activables: Order Blocks, FVG, Equal High/Low, Liquidity Sweep, BOS, ChoCH, trendlines, sessions, previous high/low et zones d'entrée.
-- Indicateurs classiques activables séparément: EMA 20, EMA 50, EMA 200, VWAP, SuperTrend et Volume.
+- Indicateurs classiques activables séparément: EMA 20, EMA 50, EMA 200, VWAP, SuperTrend, Volume et RSI 14 avec niveaux 30/50/70.
 - Tableau de décision avec score 0-100, blocs de validation, raison exacte d'attente et niveaux de setup.
 - Deux modes d'analyse cliquables:
   - TSR Smart Money: analyse rapide et réactive.

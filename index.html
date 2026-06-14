@@ -114,6 +114,21 @@
             <div id="tradingview_chart"></div>
             <div class="strategy-overlay" id="strategyOverlay" aria-hidden="true"></div>
           </div>
+
+          <section class="rsi-panel" id="rsiPanel" hidden>
+            <div class="rsi-head">
+              <strong>RSI 14</strong>
+              <span id="rsiValue">--</span>
+            </div>
+            <div class="rsi-plot" aria-label="RSI avec niveaux 30, 50 et 70">
+              <span class="rsi-level level-70">70</span>
+              <span class="rsi-level level-50">50</span>
+              <span class="rsi-level level-30">30</span>
+              <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                <polyline id="rsiLine" points="" />
+              </svg>
+            </div>
+          </section>
         </section>
 
         <aside class="signal-panel">
