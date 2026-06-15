@@ -26,9 +26,9 @@ const classicIndicators = [
   { id: "ema20", label: "EMA 20", defaultOn: false },
   { id: "ema50", label: "EMA 50", defaultOn: false },
   { id: "ema200", label: "EMA 200", defaultOn: false },
-  { id: "vwap", label: "VWAP", defaultOn: false, tradingViewStudy: "STD;VWAP" },
+  { id: "vwap", label: "VWAP", defaultOn: false },
   { id: "superTrend", label: "SuperTrend", defaultOn: false },
-  { id: "volume", label: "Volume", defaultOn: false, tradingViewStudy: "STD;Volume" },
+  { id: "volume", label: "Volume", defaultOn: false },
   { id: "rsi", label: "RSI", defaultOn: false },
 ];
 
@@ -50,7 +50,6 @@ const state = {
     smart: SMART_SCORE_DEFAULT_MINIMUM,
     gold: GOLD_SCORE_DEFAULT_MINIMUM,
   },
-  precisionChart: true,
   signalFlow: {
     activeDirection: null,
     status: "en attente",
@@ -60,7 +59,6 @@ const state = {
   classicVisibility: Object.fromEntries(classicIndicators.map((item) => [item.id, item.defaultOn])),
   tick: 0,
   basePrice: 2336.4,
-  widget: null,
   lastNewsLoad: null,
   newsEvents: [],
   api: {
@@ -103,7 +101,6 @@ const elements = {
   chartDecisionFill: document.getElementById("chartDecisionFill"),
   chartDecisionScore: document.getElementById("chartDecisionScore"),
   resetSignalPositions: document.getElementById("resetSignalPositions"),
-  togglePrecisionChart: document.getElementById("togglePrecisionChart"),
   riskRewardMinimum: document.getElementById("riskRewardMinimum"),
   smartScoreMinimum: document.getElementById("smartScoreMinimum"),
   goldScoreMinimum: document.getElementById("goldScoreMinimum"),
@@ -169,61 +166,10 @@ function boot() {
   renderOverlayControls();
   bindInteractions();
   initDraggableSignalCards();
-  syncPrecisionChartMode();
-  renderTradingView();
   loadDailyNews();
   initTsrDataApi();
   evaluateAndRender();
   window.setInterval(evaluateAndRender, 4500);
-}
-
-function renderTradingView() {
-  const target = document.getElementById("tradingview_chart");
-  target.innerHTML = "";
-
-  if (!window.TradingView) {
-    target.innerHTML = '<div class="tv-fallback">TradingView indisponible</div>';
-    return;
-  }
-
-  const studies = getTradingViewStudies();
-  const config = {
-    autosize: true,
-    symbol: "OANDA:XAUUSD",
-    interval: state.interval,
-    timezone: "Etc/UTC",
-    theme: "dark",
-    style: "1",
-    locale: "fr",
-    enable_publishing: false,
-    allow_symbol_change: false,
-    hide_side_toolbar: false,
-    details: true,
-    calendar: false,
-    support_host: "https://www.tradingview.com",
-    container_id: "tradingview_chart",
-    overrides: {
-      "mainSeriesProperties.candleStyle.upColor": "#2ee58a",
-      "mainSeriesProperties.candleStyle.downColor": "#ff5b5b",
-      "mainSeriesProperties.candleStyle.borderUpColor": "#b7ffd6",
-      "mainSeriesProperties.candleStyle.borderDownColor": "#ffc1c1",
-      "mainSeriesProperties.candleStyle.wickUpColor": "#2ee58a",
-      "mainSeriesProperties.candleStyle.wickDownColor": "#ff5b5b",
-      "mainSeriesProperties.candleStyle.drawWick": true,
-      "mainSeriesProperties.candleStyle.drawBorder": true,
-      "timeScale.rightOffset": 18,
-      "timeScale.barSpacing": 8,
-      "paneProperties.background": "#090a08",
-      "paneProperties.vertGridProperties.color": "rgba(238, 232, 207, 0.08)",
-      "paneProperties.horzGridProperties.color": "rgba(238, 232, 207, 0.08)",
-    },
-  };
-
-  if (studies.length > 0) {
-    config.studies = studies;
-  }
-
-  state.widget = new window.TradingView.widget(config);
 }
 
 function renderOverlayControls() {
@@ -266,7 +212,6 @@ function bindInteractions() {
       state.interval = button.dataset.interval;
       state.intervalLabel = button.textContent.trim();
       elements.chartInterval.textContent = state.intervalLabel;
-      renderTradingView();
       evaluateAndRender();
       if (state.api.available) loadApiHistory().then(evaluateAndRender);
     });
@@ -321,9 +266,6 @@ function bindInteractions() {
   document.querySelectorAll("[data-classic-indicator]").forEach((input) => {
     input.addEventListener("change", () => {
       state.classicVisibility[input.dataset.classicIndicator] = input.checked;
-      if (input.dataset.classicIndicator === "vwap" || input.dataset.classicIndicator === "volume") {
-        renderTradingView();
-      }
       evaluateAndRender();
     });
   });
@@ -340,15 +282,15 @@ function bindInteractions() {
     elements.workspace.classList.toggle("signal-collapsed");
   });
 
-  document.getElementById("refreshWidget").addEventListener("click", renderTradingView);
-  elements.togglePrecisionChart.addEventListener("click", () => {
-    state.precisionChart = !state.precisionChart;
-    syncPrecisionChartMode();
+  document.getElementById("refreshWidget").addEventListener("click", () => {
+    if (state.api.available) {
+      loadApiHistory().then(evaluateAndRender);
+      return;
+    }
     evaluateAndRender();
   });
   document.getElementById("fullscreenChart").addEventListener("click", () => {
     document.querySelector(".chart-desk").classList.toggle("chart-fullscreen");
-    setTimeout(renderTradingView, 120);
     setTimeout(evaluateAndRender, 160);
   });
   elements.resetSignalPositions.addEventListener("click", resetDraggableSignalCards);
@@ -367,13 +309,6 @@ function bindInteractions() {
     writeScoreMinimums();
     evaluateAndRender();
   });
-}
-
-function syncPrecisionChartMode() {
-  const precisionActive = state.precisionChart && !state.replay.active;
-  elements.chartFrame.classList.toggle("precision-active", precisionActive);
-  elements.togglePrecisionChart.textContent = precisionActive ? "TradingView" : "TSR Live";
-  elements.togglePrecisionChart.title = precisionActive ? "Afficher TradingView" : "Afficher le graphique précis TSR";
 }
 
 function initRiskRewardMinimum() {
@@ -600,9 +535,9 @@ async function loadApiReplayCandles() {
   }
 
   return {
-    candles: generateReplayCandles(state.replay.date, state.replay.timeframe),
-    source: "Replay d'entraînement local",
-    message: `Aucune bougie TSR Data API pour ${state.replay.date} ${params.timeframe}. Replay d'entraînement local activé.`,
+    candles: [],
+    source: "unavailable",
+    message: `Aucune bougie TSR Data API pour ${state.replay.date} ${params.timeframe}.`,
   };
 }
 
@@ -701,7 +636,6 @@ function toggleReplayMode() {
   state.replay.playing = false;
   stopReplayTimer();
   elements.chartFrame.classList.toggle("replay-active", state.replay.active);
-  syncPrecisionChartMode();
   document.querySelector(".replay-controls").classList.toggle("active", state.replay.active);
   elements.toggleReplay.textContent = state.replay.active ? "Désactiver" : "Activer";
   elements.replayPlay.textContent = "Play";
@@ -710,8 +644,6 @@ function toggleReplayMode() {
     resetReplaySession();
   } else {
     elements.replayStatus.textContent = "Replay désactivé";
-    renderTradingView();
-    syncPrecisionChartMode();
     evaluateAndRender();
   }
 }
@@ -811,7 +743,7 @@ function evaluateReplayAndRender() {
   state.basePrice = context.last.close;
 
   const smartResult = buildSmartMoneyAnalysis(context.session, context.market, context.news, context.zones, context.confirmation, context.candleScan);
-  const goldResult = buildGoldIntelligenceAnalysis(smartResult, context.market, context.news, context.zones, context.confirmation, context.session, context.candleScan);
+  const goldResult = buildGoldIntelligenceAnalysis(smartResult, context.market, context.news, context.zones, context.confirmation, context.session, context.candleScan, visibleCandles);
   let activeResult = state.analysisMode === "gold" ? goldResult : smartResult;
   activeResult = applySignalLifecycle(activeResult);
   const entryProjection = buildEntryProjection(activeResult, context.market, context.zones, context.confirmation, context.candleScan, visibleCandles);
@@ -923,38 +855,6 @@ function buildReplayContext(candles) {
   };
 }
 
-function generateReplayCandles(date, timeframe) {
-  const seed = hashString(`${date}-${timeframe}-XAUUSD`);
-  const random = seededRandom(seed);
-  const minutes = timeframe === "30S" ? 0.5 : Number(timeframe);
-  const start = new Date(`${date}T00:00:00Z`).getTime();
-  const candles = [];
-  let price = 2320 + (seed % 80);
-
-  for (let index = 0; index < 220; index += 1) {
-    const trend = Math.sin(index / 28 + (seed % 11)) * 0.9;
-    const impulse = Math.cos(index / 9 + (seed % 5)) * 0.45;
-    const noise = (random() - 0.5) * 1.9;
-    const open = price;
-    const close = Math.max(1700, open + trend + impulse + noise);
-    const wickUp = 0.45 + random() * 1.9;
-    const wickDown = 0.45 + random() * 1.9;
-    const high = Math.max(open, close) + wickUp;
-    const low = Math.min(open, close) - wickDown;
-    candles.push({
-      time: new Date(start + index * minutes * 60 * 1000),
-      open,
-      high,
-      low,
-      close,
-      volume: Math.round(700 + random() * 2600),
-    });
-    price = close;
-  }
-
-  return candles;
-}
-
 function drawReplayChart(candles, context, activeResult, entryProjection) {
   const canvas = elements.replayCanvas;
   const rect = canvas.getBoundingClientRect();
@@ -972,8 +872,10 @@ function drawReplayChart(candles, context, activeResult, entryProjection) {
   ctx.fillRect(0, 0, rect.width, rect.height);
 
   const visible = candles.slice(-72);
-  const high = Math.max(...visible.map((candle) => candle.high));
-  const low = Math.min(...visible.map((candle) => candle.low));
+  const visibleStartIndex = candles.length - visible.length;
+  const indicatorPrices = getVisibleClassicPriceValues(candles, visibleStartIndex);
+  const high = Math.max(...visible.map((candle) => candle.high), ...indicatorPrices);
+  const low = Math.min(...visible.map((candle) => candle.low), ...indicatorPrices);
   const padding = Math.max(2, (high - low) * 0.12);
   const max = high + padding;
   const min = low - padding;
@@ -985,7 +887,6 @@ function drawReplayChart(candles, context, activeResult, entryProjection) {
   const plotWidth = Math.max(120, rect.width - leftPadding - rightPadding);
   const priceToY = (price) => ((max - price) / priceRange) * (rect.height - topPadding - bottomPadding) + topPadding;
   const candleWidth = Math.max(5, plotWidth / visible.length);
-  const visibleStartIndex = candles.length - visible.length;
   const candleToX = (absoluteIndex) => {
     const localIndex = clamp(absoluteIndex - visibleStartIndex, 0, visible.length - 1);
     return leftPadding + localIndex * candleWidth + candleWidth / 2;
@@ -1002,9 +903,11 @@ function drawReplayChart(candles, context, activeResult, entryProjection) {
     candleWidth,
     plotWidth,
     plotRight: leftPadding + plotWidth,
+    rect,
   };
 
   drawReplayGrid(ctx, rect);
+  drawClassicIndicators(ctx, geometry, candles);
   visible.forEach((candle, index) => {
     const x = leftPadding + index * candleWidth + candleWidth / 2;
     const openY = clamp(priceToY(candle.open), topPadding, rect.height - bottomPadding);
@@ -1066,6 +969,164 @@ function drawReplayGrid(ctx, rect) {
     ctx.lineTo(rect.width, y);
     ctx.stroke();
   }
+}
+
+function getVisibleClassicPriceValues(candles, visibleStartIndex) {
+  const classic = state.classicVisibility;
+  const values = [];
+  const collect = (series) => values.push(...series.slice(visibleStartIndex).filter(Number.isFinite));
+  if (classic.ema20) collect(calculateEmaSeries(candles, 20));
+  if (classic.ema50) collect(calculateEmaSeries(candles, 50));
+  if (classic.ema200) collect(calculateEmaSeries(candles, 200));
+  if (classic.vwap) collect(calculateVwapSeries(candles));
+  if (classic.superTrend) collect(calculateSuperTrendSeries(candles).map((item) => item?.value));
+  return values;
+}
+
+function drawClassicIndicators(ctx, geometry, candles) {
+  const classic = state.classicVisibility;
+  if (classic.volume) drawVolumeBars(ctx, geometry, candles);
+  if (classic.ema20) drawIndicatorSeries(ctx, geometry, calculateEmaSeries(candles, 20), "#3bd8bd", "EMA 20");
+  if (classic.ema50) drawIndicatorSeries(ctx, geometry, calculateEmaSeries(candles, 50), "#74a7ff", "EMA 50");
+  if (classic.ema200) drawIndicatorSeries(ctx, geometry, calculateEmaSeries(candles, 200), "#e7b84e", "EMA 200");
+  if (classic.vwap) drawIndicatorSeries(ctx, geometry, calculateVwapSeries(candles), "#dcd6c8", "VWAP");
+  if (classic.superTrend) drawSuperTrendSeries(ctx, geometry, calculateSuperTrendSeries(candles));
+}
+
+function drawVolumeBars(ctx, geometry, candles) {
+  const { visible, visibleStartIndex, candleToX, candleWidth, rect, bottomPadding, plotRight } = geometry;
+  const maxVolume = Math.max(1, ...visible.map((candle) => candle.volume || 0));
+  const baseY = rect.height - bottomPadding + 24;
+  const maxHeight = Math.min(62, rect.height * 0.16);
+
+  ctx.save();
+  ctx.globalAlpha = 0.42;
+  visible.forEach((candle, localIndex) => {
+    const absoluteIndex = visibleStartIndex + localIndex;
+    const height = clamp(((candle.volume || 0) / maxVolume) * maxHeight, 1, maxHeight);
+    const x = candleToX(absoluteIndex);
+    ctx.fillStyle = candle.close >= candle.open ? "rgba(70, 209, 123, 0.58)" : "rgba(239, 98, 98, 0.58)";
+    ctx.fillRect(x - candleWidth * 0.28, baseY - height, candleWidth * 0.56, height);
+  });
+  ctx.restore();
+  ctx.fillStyle = "rgba(220, 214, 200, 0.68)";
+  ctx.font = "800 10px ui-sans-serif, system-ui";
+  ctx.fillText("Volume", Math.min(plotRight - 58, 18), baseY - maxHeight - 5);
+}
+
+function drawIndicatorSeries(ctx, geometry, values, color, label) {
+  const { visible, visibleStartIndex, candleToX, priceToY, topPadding, bottomPadding, rect, plotRight } = geometry;
+  let started = false;
+  let lastPoint = null;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.7;
+  ctx.beginPath();
+  for (let localIndex = 0; localIndex < visible.length; localIndex += 1) {
+    const absoluteIndex = visibleStartIndex + localIndex;
+    const value = values[absoluteIndex];
+    if (!Number.isFinite(value)) continue;
+    const x = candleToX(absoluteIndex);
+    const y = clamp(priceToY(value), topPadding, rect.height - bottomPadding);
+    if (!started) {
+      ctx.moveTo(x, y);
+      started = true;
+    } else {
+      ctx.lineTo(x, y);
+    }
+    lastPoint = { x, y };
+  }
+  if (!started) return;
+  ctx.stroke();
+  if (lastPoint) {
+    ctx.fillStyle = color;
+    ctx.font = "800 10px ui-sans-serif, system-ui";
+    ctx.fillText(label, Math.min(lastPoint.x + 6, plotRight - 52), lastPoint.y - 6);
+  }
+}
+
+function drawSuperTrendSeries(ctx, geometry, values) {
+  const { visible, visibleStartIndex, candleToX, priceToY, topPadding, bottomPadding, rect, plotRight } = geometry;
+  let previous = null;
+  values.slice(visibleStartIndex, visibleStartIndex + visible.length).forEach((item, localIndex) => {
+    const absoluteIndex = visibleStartIndex + localIndex;
+    if (!item || !Number.isFinite(item.value)) return;
+    const point = {
+      x: candleToX(absoluteIndex),
+      y: clamp(priceToY(item.value), topPadding, rect.height - bottomPadding),
+      trend: item.trend,
+    };
+    if (previous) {
+      ctx.strokeStyle = point.trend === "BUY" ? "#46d17b" : "#ef6262";
+      ctx.lineWidth = 1.9;
+      ctx.beginPath();
+      ctx.moveTo(previous.x, previous.y);
+      ctx.lineTo(point.x, point.y);
+      ctx.stroke();
+    }
+    previous = point;
+  });
+  if (previous) {
+    ctx.fillStyle = previous.trend === "BUY" ? "#46d17b" : "#ef6262";
+    ctx.font = "800 10px ui-sans-serif, system-ui";
+    ctx.fillText("SuperTrend", Math.min(previous.x + 6, plotRight - 76), previous.y - 6);
+  }
+}
+
+function calculateEmaSeries(candles, period) {
+  const values = Array(candles.length).fill(null);
+  if (candles.length < period) return values;
+  const multiplier = 2 / (period + 1);
+  let ema = average(candles.slice(0, period).map((candle) => candle.close));
+  values[period - 1] = ema;
+  for (let index = period; index < candles.length; index += 1) {
+    ema = candles[index].close * multiplier + ema * (1 - multiplier);
+    values[index] = ema;
+  }
+  return values;
+}
+
+function calculateVwapSeries(candles) {
+  let cumulativePriceVolume = 0;
+  let cumulativeVolume = 0;
+  return candles.map((candle) => {
+    const volume = Math.max(1, Number(candle.volume) || 1);
+    const typicalPrice = (candle.high + candle.low + candle.close) / 3;
+    cumulativePriceVolume += typicalPrice * volume;
+    cumulativeVolume += volume;
+    return cumulativePriceVolume / cumulativeVolume;
+  });
+}
+
+function calculateAtrSeries(candles, period = 10) {
+  return candles.map((candle, index) => {
+    const previousClose = candles[index - 1]?.close ?? candle.close;
+    const trueRange = Math.max(candle.high - candle.low, Math.abs(candle.high - previousClose), Math.abs(candle.low - previousClose));
+    if (index === 0) return trueRange;
+    const start = Math.max(0, index - period + 1);
+    const ranges = candles.slice(start, index + 1).map((item, itemIndex) => {
+      const absoluteIndex = start + itemIndex;
+      const prevClose = candles[absoluteIndex - 1]?.close ?? item.close;
+      return Math.max(item.high - item.low, Math.abs(item.high - prevClose), Math.abs(item.low - prevClose));
+    });
+    return average(ranges);
+  });
+}
+
+function calculateSuperTrendSeries(candles) {
+  const atr = calculateAtrSeries(candles, 10);
+  const ema = calculateEmaSeries(candles, 20);
+  let trend = "WAIT";
+  return candles.map((candle, index) => {
+    const basis = (candle.high + candle.low) / 2;
+    const reference = ema[index] ?? candle.close;
+    if (candle.close > reference) trend = "BUY";
+    if (candle.close < reference) trend = "SELL";
+    const distance = Math.max(0.8, atr[index] * 1.65);
+    return {
+      value: trend === "SELL" ? basis + distance : basis - distance,
+      trend: trend === "WAIT" ? candle.close >= candle.open ? "BUY" : "SELL" : trend,
+    };
+  });
 }
 
 function drawReplayOverlays(ctx, rect, context, activeResult, geometry, entryProjection) {
@@ -1466,23 +1527,6 @@ function formatReplayTime(time) {
   });
 }
 
-function hashString(value) {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-function seededRandom(seed) {
-  let value = seed || 1;
-  return () => {
-    value = Math.imul(1664525, value) + 1013904223;
-    return ((value >>> 0) / 4294967296);
-  };
-}
-
 function parsePrice(value) {
   return Number(String(value).replace(/,/g, ""));
 }
@@ -1683,42 +1727,6 @@ function summarizeCandleFrame(items, preferredDirection, label) {
   };
 }
 
-function buildLiveCandles(market) {
-  const candles = [];
-  let price = state.basePrice - Math.sin((state.tick + 12) / 5) * 8;
-  for (let index = 0; index < 80; index += 1) {
-    const phase = state.tick + index;
-    const directionalPull = market.bias === "BUY" ? 0.34 : market.bias === "SELL" ? -0.34 : 0;
-    const impulse = Math.sin(phase / 3.7) * 0.95 + directionalPull;
-    const open = price;
-    const close = open + impulse + Math.cos(phase / 5) * 0.42;
-    const high = Math.max(open, close) + 0.55 + Math.abs(Math.sin(phase / 2.4)) * 1.55;
-    const low = Math.min(open, close) - 0.55 - Math.abs(Math.cos(phase / 2.9)) * 1.55;
-    const volume = Math.round(900 + Math.abs(Math.sin(phase / 4)) * 1700 + (phase % 11 === 0 ? 900 : 0));
-    candles.push({ time: new Date(Date.now() - (80 - index) * 60 * 1000), open, high, low, close, volume });
-    price = close;
-  }
-  if (market.valid && state.tick % 5 >= 2) {
-    const last = candles[candles.length - 1];
-    const previousClose = candles[candles.length - 2]?.close || last.close;
-    const averageVolume = average(candles.slice(-20).map((item) => item.volume));
-    if (market.bias === "BUY") {
-      last.open = previousClose - 0.45;
-      last.low = last.open - 3.15;
-      last.close = last.open + 2.75;
-      last.high = last.close + 0.42;
-    }
-    if (market.bias === "SELL") {
-      last.open = previousClose + 0.45;
-      last.high = last.open + 3.15;
-      last.close = last.open - 2.75;
-      last.low = last.close - 0.42;
-    }
-    last.volume = Math.round(averageVolume * 1.42);
-  }
-  return candles;
-}
-
 function average(values) {
   const filtered = values.filter(Number.isFinite);
   if (!filtered.length) return 0;
@@ -1765,17 +1773,21 @@ function evaluateAndRender() {
   }
 
   state.tick += 1;
-  const session = getSession();
-  const market = getMarketWeather();
   const news = getNewsRisk();
-  const zones = getKeyZones(market);
-  const liveCandles = getLivePrecisionCandles(market);
+  const session = getSession();
+  const liveCandles = getLivePrecisionCandles();
+  const market = getMarketWeather(liveCandles);
+  const zones = getKeyZones(market, liveCandles);
+  if (!liveCandles.length) {
+    renderNoLiveCandlesState(session, market, news, zones);
+    return;
+  }
   if (liveCandles.length) state.basePrice = liveCandles[liveCandles.length - 1].close;
   const candleScan = buildCandleScan(liveCandles, market.bias);
   const confirmation = getEntryConfirmation(market, zones, candleScan);
-  const rsi = getRsiConfirmation(market.bias);
+  const rsi = getRsiConfirmation(market.bias, liveCandles);
   const smartResult = buildSmartMoneyAnalysis(session, market, news, zones, confirmation, candleScan);
-  const goldResult = buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session, candleScan);
+  const goldResult = buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session, candleScan, liveCandles);
   let activeResult = state.analysisMode === "gold" ? goldResult : smartResult;
   activeResult = applySignalLifecycle(activeResult);
   const entryProjection = buildEntryProjection(activeResult, market, zones, confirmation, candleScan, liveCandles);
@@ -1817,19 +1829,106 @@ function evaluateAndRender() {
   renderCandleScanner(candleScan);
 }
 
-function getLivePrecisionCandles(market) {
+function getLivePrecisionCandles() {
   const apiCandles = normalizeApiCandles(extractCandles({ candles: state.api.history }));
   if (apiCandles.length >= 30) return apiCandles.slice(-220);
-  return buildLiveCandles(market);
+  return [];
 }
 
 function renderLivePrecisionChart(candles, context, activeResult, entryProjection) {
-  if (!state.precisionChart || state.replay.active) return;
+  if (state.replay.active) return;
   if (!candles.length) {
     drawReplayMessage("Aucune bougie live TSR disponible.");
     return;
   }
   drawReplayChart(candles, context, activeResult, entryProjection);
+}
+
+function renderNoLiveCandlesState(session, market, news, zones) {
+  const candleScan = buildEmptyCandleScan();
+  const confirmation = {
+    valid: false,
+    timeframe: state.intervalLabel,
+    reason: "Aucune bougie live TSR Data API disponible",
+    choch: false,
+    candleClose: false,
+    candleValid: false,
+  };
+  const setup = buildSetup("WAIT", zones, confirmation);
+  const activeResult = {
+    id: state.analysisMode,
+    name: state.analysisMode === "gold" ? "TSR Gold Intelligence" : "TSR Smart Money",
+    valid: false,
+    direction: "WAIT",
+    status: "AUCUN TRADE",
+    setupState: "Aucun trade qualifié",
+    score: 0,
+    scoreLabel: "pas de trade",
+    biasLabel: "Données live indisponibles",
+    setup,
+    riskReward: setup.riskReward,
+    timeframe: state.intervalLabel,
+    zone: "Aucune zone calculée sans bougies live",
+    liquidity: "Non calculée",
+    h1Direction: "Indisponible",
+    m15Direction: "Indisponible",
+    signalLifecycleStatus: "en attente",
+    blockingReason: "Aucune bougie live TSR Data API disponible",
+    confirmationSummary: "Analyse suspendue tant que /history ne renvoie pas de bougies",
+    reason: "Aucun trade qualifié — attente de bougies live TSR Data API.",
+    badges: [["En attente", "pending"], ["Données live", "risk"]],
+    blocks: [
+      ["Météo du marché", false, "Indisponible sans bougies live"],
+      ["Zones clés", false, "Aucune zone calculée sans données OHLC réelles"],
+      ["Confirmation d'entrée", false, "Aucune bougie de confirmation disponible"],
+      ["Risk/Reward minimum", false, "Calculé après détection d'une vraie entrée"],
+      ["News économiques", news.valid, news.reason],
+    ],
+  };
+  const entryProjection = {
+    stage: "none",
+    direction: "WAIT",
+    setup,
+    metrics: buildPositionMetrics("WAIT", setup, "none", []),
+    statusLabel: "Aucun trade qualifié",
+    reason: "Aucune bougie live TSR Data API — vérifiez que votre PC, npm start et Cloudflare Tunnel sont actifs.",
+  };
+
+  elements.sessionName.textContent = session.name;
+  elements.marketBias.textContent = activeResult.biasLabel;
+  elements.scoreTop.textContent = activeResult.score;
+  elements.setupState.textContent = entryProjection.statusLabel;
+  elements.activeModeLabel.textContent = activeResult.name;
+  elements.tradeDirection.textContent = activeResult.status;
+  elements.tradeDirection.style.color = getStatusColor(activeResult.status);
+  elements.signalReason.textContent = entryProjection.reason;
+  renderChartSignalAlert(activeResult, entryProjection);
+  elements.badgeRow.innerHTML = activeResult.badges.map(renderBadge).join("");
+  elements.scoreFill.style.width = "0%";
+  elements.scoreValue.textContent = "0 / 100";
+  elements.entryPrice.textContent = "--";
+  elements.stopLoss.textContent = "--";
+  elements.tp1.textContent = "--";
+  elements.tp2.textContent = "--";
+  elements.tp3.textContent = "--";
+  renderRiskRewardDetails(activeResult.riskReward);
+  elements.confirmTf.textContent = state.intervalLabel;
+  elements.usedZone.textContent = activeResult.zone;
+  elements.targetLiquidity.textContent = activeResult.liquidity;
+  elements.newsRisk.textContent = news.label;
+  elements.blockingReason.textContent = activeResult.blockingReason;
+  elements.signalLifecycleStatus.textContent = activeResult.signalLifecycleStatus;
+  elements.h1Direction.textContent = activeResult.h1Direction;
+  elements.m15Direction.textContent = activeResult.m15Direction;
+  elements.confirmationSummary.textContent = activeResult.confirmationSummary;
+
+  renderBlocks(activeResult.blocks);
+  renderComparison(activeResult, activeResult);
+  elements.scenarioList.innerHTML = "<article><strong>Aucune zone live</strong><span>Le graphique attend des bougies réelles depuis TSR Data API /history.</span></article>";
+  clearStrategyOverlay();
+  drawReplayMessage("Aucune bougie live TSR Data API disponible.");
+  renderRsiPanel({ value: "--", values: [], valid: false, label: "RSI en attente" });
+  renderCandleScanner(candleScan);
 }
 
 function applySignalLifecycle(result) {
@@ -1895,7 +1994,33 @@ function getSession() {
   return { name: "Transition", bias: 0 };
 }
 
-function getMarketWeather() {
+function getMarketWeather(candles = []) {
+  if (candles.length >= 30) {
+    const lookback = candles.slice(-80);
+    const first = lookback[0];
+    const last = lookback[lookback.length - 1];
+    const high = Math.max(...lookback.map((candle) => candle.high));
+    const low = Math.min(...lookback.map((candle) => candle.low));
+    const range = Math.max(0.1, high - low);
+    const move = last.close - first.open;
+    const trendStrength = Math.abs(move) / range;
+    const recentRanges = lookback.slice(-12).map((candle) => candle.high - candle.low);
+    const compression = average(recentRanges) < range / Math.max(8, lookback.length * 0.24);
+    const isRange = trendStrength < 0.24 || compression;
+    const bias = isRange ? "WAIT" : move > 0 ? "BUY" : "SELL";
+    const expansion = average(recentRanges.slice(-4)) > average(recentRanges.slice(0, 8)) * 1.18;
+    let context = isRange ? "range dangereux" : bias === "BUY" ? "tendance haussière multi-timeframe" : "tendance baissière multi-timeframe";
+    if (expansion && !isRange) context += " avec expansion";
+
+    return {
+      valid: bias !== "WAIT" && !isRange,
+      bias,
+      action: bias === "BUY" ? "BUY privilégié" : bias === "SELL" ? "SELL privilégié" : "Attendre",
+      context,
+      score: isRange ? 28 : clamp(Math.round(38 + trendStrength * 52), 38, 86),
+    };
+  }
+
   const wave = Math.sin(state.tick / 4);
   const trendScore = Math.round(58 + wave * 31);
   const expansion = Math.cos(state.tick / 5) > 0.1;
@@ -1941,7 +2066,30 @@ function getNewsRisk() {
   };
 }
 
-function getKeyZones(market) {
+function getKeyZones(market, candles = []) {
+  if (candles.length >= 25) {
+    const last = candles[candles.length - 1];
+    const previous = candles.slice(-25, -1);
+    const previousHigh = Math.max(...previous.map((candle) => candle.high));
+    const previousLow = Math.min(...previous.map((candle) => candle.low));
+    const liquidityTaken = market.bias === "SELL" ? last.high > previousHigh : market.bias === "BUY" ? last.low < previousLow : last.high > previousHigh || last.low < previousLow;
+    const fvg = getReplayFvgZone(candles.slice(-72), market.bias, Math.max(0, candles.length - 72));
+    const orderBlock = getReplayOrderBlockZone(candles.slice(-72), market.bias, Math.max(0, candles.length - 72));
+    const hasZone = Boolean(fvg || orderBlock);
+    const primary = market.bias === "SELL" ? "H1 bearish order block + EQH" : market.bias === "BUY" ? "M15 bullish order block + FVG" : "Zone neutre";
+    const targetLiquidity = market.bias === "SELL" ? "Previous Low / London Low" : market.bias === "BUY" ? "Previous High / NY High" : "Liquidité en attente";
+
+    return {
+      valid: market.valid && hasZone && liquidityTaken,
+      primary,
+      targetLiquidity,
+      liquidityTaken,
+      previousHigh,
+      previousLow,
+      reason: liquidityTaken ? "Liquidité prise sur les bougies live" : "Liquidité non prise",
+    };
+  }
+
   const phase = state.tick % 6;
   const liquidityTaken = phase !== 2;
   const valid = market.valid && liquidityTaken;
@@ -1958,6 +2106,32 @@ function getKeyZones(market) {
 }
 
 function getEntryConfirmation(market, zones, candleScan) {
+  if (candleScan.current && Number.isFinite(zones.previousHigh) && Number.isFinite(zones.previousLow)) {
+    const candle = candleScan.current;
+    const buffer = Math.max(0.4, candle.totalSize * 0.22);
+    const choch = market.bias === "BUY"
+      ? candle.close > zones.previousHigh - buffer
+      : market.bias === "SELL"
+        ? candle.close < zones.previousLow + buffer
+        : false;
+    const candleClose = market.bias === "BUY"
+      ? candle.close >= Math.max(candle.open, candle.low + candle.totalSize * 0.58)
+      : market.bias === "SELL"
+        ? candle.close <= Math.min(candle.open, candle.high - candle.totalSize * 0.58)
+        : false;
+    const candleValid = candleScan.valid;
+    const valid = market.valid && zones.valid && choch && candleClose && candleValid;
+
+    return {
+      valid,
+      timeframe: state.intervalLabel === "H4" || state.intervalLabel === "H1" ? "M5" : state.intervalLabel,
+      reason: valid ? `ChoCH + clôture claire + ${candleScan.summary}` : !choch ? "Order Block détecté mais pas de ChoCH" : !candleClose ? "Pas de confirmation bougie" : `Candle Quality insuffisante: ${candleScan.weakReasons.join(", ") || candleScan.summary}`,
+      choch,
+      candleClose,
+      candleValid,
+    };
+  }
+
   const confirmationCycle = state.tick % 5;
   const choch = confirmationCycle >= 2;
   const candleClose = confirmationCycle !== 4;
@@ -2143,7 +2317,7 @@ function buildSmartMoneyAnalysis(session, market, news, zones, confirmation, can
   };
 }
 
-function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session, candleScan) {
+function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session, candleScan, candles = []) {
   const h1Direction = getH1Direction(market);
   const m15Direction = getM15Direction(market, zones);
   const h1Aligned = smartResult.direction !== "WAIT" && h1Direction.bias === smartResult.direction;
@@ -2151,7 +2325,7 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
   const m15Refinement = state.tick % 5 !== 3;
   const trendline = state.tick % 4 !== 0;
   const fibonacci = state.tick % 3 !== 1;
-  const rsiConfirmation = getRsiConfirmation(smartResult.direction);
+  const rsiConfirmation = getRsiConfirmation(smartResult.direction, candles);
   const rsi = rsiConfirmation.valid;
   const priceAction = confirmation.candleClose && candleScan.valid && state.tick % 6 !== 4;
   const crtAvailable = false;
@@ -2285,12 +2459,11 @@ function getRsiLabel(direction) {
   return "RSI secondaire en attente";
 }
 
-function getRsiConfirmation(direction) {
-  const values = Array.from({ length: 32 }, (_, index) => {
-    const wave = Math.sin((state.tick + index) / 4) * 18;
-    const pulse = Math.cos((state.tick + index) / 7) * 7;
-    return clamp(Math.round(50 + wave + pulse), 12, 88);
-  });
+function getRsiConfirmation(direction, candles = []) {
+  const sourceCandles = candles.length ? candles : normalizeApiCandles(extractCandles({ candles: state.api.history }));
+  if (sourceCandles.length) return getReplayRsi(sourceCandles, direction);
+
+  const values = Array.from({ length: 32 }, () => 50);
   const value = values[values.length - 1];
   const previous = values[values.length - 2];
   const rising = value > previous;
@@ -2718,43 +2891,7 @@ function addPositionToolItem(items, projection, top, sideClass) {
 }
 
 function renderStrategyOverlay(direction, zones, confirmation, entryProjection) {
-  if (!state.replay.active) {
-    clearStrategyOverlay();
-    return;
-  }
-
-  const visible = state.smartMoneyVisibility;
-  const classic = state.classicVisibility;
-  const items = [];
-
-  if (visible.sessions) {
-    items.push({ className: "overlay-session", label: "Asie", style: "left: 8%;" });
-    items.push({ className: "overlay-session", label: "Londres", style: "left: 38%;" });
-    items.push({ className: "overlay-session", label: "New York", style: "left: 68%;" });
-  }
-  if (visible.orderBlocks) items.push({ className: "overlay-ob", label: "OB H1", style: "left: 55%; top: 24%; width: 25%; height: 9%;" });
-  if (visible.fvg) items.push({ className: "overlay-fvg", label: "FVG M15", style: "left: 33%; top: 45%; width: 18%; height: 8%;" });
-  if (visible.equalHigh) items.push({ className: "overlay-eqh overlay-line", label: "", style: "left: 17%; top: 20%; width: 64%;" });
-  if (visible.equalLow) items.push({ className: "overlay-eql overlay-line", label: "", style: "left: 12%; top: 72%; width: 59%;" });
-  if (visible.liquiditySweep) items.push({ className: "overlay-liq", label: "Sweep", style: "left: 70%; top: 17%;" });
-  if (visible.bos) items.push({ className: "overlay-buy", label: "BOS", style: "left: 48%; top: 38%;" });
-  if (visible.choch) items.push({ className: confirmation.valid ? "overlay-buy" : "overlay-sell", label: "ChoCH", style: "left: 62%; top: 51%;" });
-  if (visible.idm) items.push({ className: "overlay-idm overlay-line", label: "IDM", style: "left: 42%; top: 29%; width: 18%;" });
-  if (visible.target) items.push({ className: "overlay-target overlay-line", label: "Target", style: "left: 49%; top: 76%; width: 32%;" });
-  if (visible.trendlines) items.push({ className: "overlay-liq overlay-line", label: "", style: "left: 22%; top: 61%; width: 47%; transform: rotate(-9deg);" });
-  if (visible.previousHL) {
-    items.push({ className: "overlay-tp overlay-line", label: "", style: "left: 10%; top: 14%; width: 78%;" });
-    items.push({ className: "overlay-sl overlay-line", label: "", style: "left: 10%; top: 82%; width: 78%;" });
-  }
-  addEntryProjectionItems(items, entryProjection);
-  if (classic.ema20) items.push({ className: "overlay-ema overlay-ema20", label: "", style: "left: 12%; top: 37%; width: 68%; transform: rotate(-7deg);" });
-  if (classic.ema50) items.push({ className: "overlay-ema overlay-ema50", label: "", style: "left: 10%; top: 48%; width: 70%; transform: rotate(-3deg);" });
-  if (classic.ema200) items.push({ className: "overlay-ema overlay-ema200", label: "", style: "left: 8%; top: 59%; width: 72%; transform: rotate(2deg);" });
-  if (classic.superTrend) items.push({ className: "overlay-supertrend", label: "", style: "left: 20%; top: 66%; width: 55%; transform: rotate(-5deg);" });
-
-  elements.strategyOverlay.innerHTML = items
-    .map((item) => `<span class="overlay-item ${item.className}" style="${item.style}">${item.label}</span>`)
-    .join("");
+  clearStrategyOverlay();
 }
 
 function clearStrategyOverlay() {
@@ -2771,20 +2908,19 @@ function renderRsiPanel(rsi) {
 
   elements.rsiPanel.hidden = false;
   elements.rsiValue.textContent = `${rsi.value}`;
+  if (!rsi.values.length) {
+    elements.rsiLine.setAttribute("points", "");
+    return;
+  }
+  const denominator = Math.max(1, rsi.values.length - 1);
   const points = rsi.values
     .map((value, index) => {
-      const x = (index / (rsi.values.length - 1)) * 100;
+      const x = (index / denominator) * 100;
       const y = 100 - value;
       return `${x.toFixed(2)},${y.toFixed(2)}`;
     })
     .join(" ");
   elements.rsiLine.setAttribute("points", points);
-}
-
-function getTradingViewStudies() {
-  return classicIndicators
-    .filter((item) => item.tradingViewStudy && state.classicVisibility[item.id])
-    .map((item) => item.tradingViewStudy);
 }
 
 function safeJson(value) {

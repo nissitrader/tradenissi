@@ -6,7 +6,7 @@
     <title>TSR Gold Intelligence Engine</title>
     <meta
       name="description"
-      content="TSR Gold Intelligence Engine analyse XAUUSD avec TradingView, Smart Money, ICT, Order Blocks et liquidité."
+      content="TSR Gold Intelligence Engine analyse XAUUSD avec graphique principal TSR, Smart Money, ICT, Order Blocks et liquidité."
     />
     <link rel="icon" type="image/png" href="./assets/tsr-logo.png" />
     <link rel="stylesheet" href="./styles.css" />
@@ -176,14 +176,11 @@
           <div class="chart-toolbar">
             <div class="chart-title">
               <span class="live-dot"></span>
-              <strong>TradingView XAUUSD</strong>
+              <strong>Graphique principal XAUUSD</strong>
               <small id="chartInterval">H4</small>
             </div>
             <div class="toolbar-actions">
-              <button type="button" id="togglePrecisionChart" title="Basculer graphique TSR / TradingView" aria-label="Basculer graphique TSR / TradingView">
-                TSR Live
-              </button>
-              <button type="button" id="refreshWidget" title="Recharger TradingView" aria-label="Recharger TradingView">↻</button>
+              <button type="button" id="refreshWidget" title="Rafraichir le graphique" aria-label="Rafraichir le graphique">↻</button>
               <button type="button" id="fullscreenChart" title="Agrandir le graphique" aria-label="Agrandir le graphique">⛶</button>
               <button type="button" class="reset-position-button" id="resetSignalPositions" title="Réinitialiser position" aria-label="Réinitialiser position">
                 Réinitialiser position
@@ -192,7 +189,6 @@
           </div>
 
           <div class="chart-frame" id="chartFrame">
-            <div id="tradingview_chart"></div>
             <canvas id="replayCanvas" class="replay-canvas" aria-label="Graphique TSR XAUUSD"></canvas>
             <div class="strategy-overlay" id="strategyOverlay" aria-hidden="true"></div>
             <aside class="chart-signal-alert draggable-signal-card" id="chartSignalAlert" aria-live="polite" data-draggable-card="chartSignalAlert">
@@ -380,7 +376,6 @@
       </section>
     </main>
 
-    <script src="https://s3.tradingview.com/tv.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>
