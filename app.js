@@ -43,6 +43,7 @@ const state = {
   analysisMode: "smart",
   showBothAnalyses: false,
   riskRewardMinimum: RISK_REWARD_DEFAULT_MINIMUM,
+  precisionChart: true,
   smartMoneyVisibility: Object.fromEntries(smartMoneyOverlays.map((item) => [item.id, item.defaultOn])),
   classicVisibility: Object.fromEntries(classicIndicators.map((item) => [item.id, item.defaultOn])),
   tick: 0,
@@ -90,6 +91,7 @@ const elements = {
   chartDecisionFill: document.getElementById("chartDecisionFill"),
   chartDecisionScore: document.getElementById("chartDecisionScore"),
   resetSignalPositions: document.getElementById("resetSignalPositions"),
+  togglePrecisionChart: document.getElementById("togglePrecisionChart"),
   riskRewardMinimum: document.getElementById("riskRewardMinimum"),
   overlayControls: document.getElementById("overlayControls"),
   strategyOverlay: document.getElementById("strategyOverlay"),
@@ -151,6 +153,7 @@ function boot() {
   renderOverlayControls();
   bindInteractions();
   initDraggableSignalCards();
+  syncPrecisionChartMode();
   renderTradingView();
   loadDailyNews();
   initTsrDataApi();
@@ -249,6 +252,7 @@ function bindInteractions() {
       elements.chartInterval.textContent = state.intervalLabel;
       renderTradingView();
       evaluateAndRender();
+      if (state.api.available) loadApiHistory().then(evaluateAndRender);
     });
   });
 
@@ -321,9 +325,15 @@ function bindInteractions() {
   });
 
   document.getElementById("refreshWidget").addEventListener("click", renderTradingView);
+  elements.togglePrecisionChart.addEventListener("click", () => {
+    state.precisionChart = !state.precisionChart;
+    syncPrecisionChartMode();
+    evaluateAndRender();
+  });
   document.getElementById("fullscreenChart").addEventListener("click", () => {
     document.querySelector(".chart-desk").classList.toggle("chart-fullscreen");
     setTimeout(renderTradingView, 120);
+    setTimeout(evaluateAndRender, 160);
   });
   elements.resetSignalPositions.addEventListener("click", resetDraggableSignalCards);
   elements.riskRewardMinimum.addEventListener("change", () => {
@@ -331,6 +341,13 @@ function bindInteractions() {
     writeRiskRewardMinimum();
     evaluateAndRender();
   });
+}
+
+function syncPrecisionChartMode() {
+  const precisionActive = state.precisionChart && !state.replay.active;
+  elements.chartFrame.classList.toggle("precision-active", precisionActive);
+  elements.togglePrecisionChart.textContent = precisionActive ? "TradingView" : "TSR Live";
+  elements.togglePrecisionChart.title = precisionActive ? "Afficher TradingView" : "Afficher le graphique précis TSR";
 }
 
 function initRiskRewardMinimum() {
@@ -483,6 +500,7 @@ async function initTsrDataApi() {
   state.api.message = "TSR Data API connectée";
   elements.apiNotice.hidden = true;
   await Promise.all([loadApiHistory(), loadApiSignals()]);
+  evaluateAndRender();
 }
 
 async function loadApiHistory() {
@@ -636,6 +654,7 @@ function toggleReplayMode() {
   state.replay.playing = false;
   stopReplayTimer();
   elements.chartFrame.classList.toggle("replay-active", state.replay.active);
+  syncPrecisionChartMode();
   document.querySelector(".replay-controls").classList.toggle("active", state.replay.active);
   elements.toggleReplay.textContent = state.replay.active ? "Désactiver" : "Activer";
   elements.replayPlay.textContent = "Play";
@@ -645,6 +664,7 @@ function toggleReplayMode() {
   } else {
     elements.replayStatus.textContent = "Replay désactivé";
     renderTradingView();
+    syncPrecisionChartMode();
     evaluateAndRender();
   }
 }
@@ -1700,13 +1720,14 @@ function evaluateAndRender() {
   const market = getMarketWeather();
   const news = getNewsRisk();
   const zones = getKeyZones(market);
-  const candleScan = buildCandleScan(buildLiveCandles(market), market.bias);
+  const liveCandles = getLivePrecisionCandles(market);
+  const candleScan = buildCandleScan(liveCandles, market.bias);
   const confirmation = getEntryConfirmation(market, zones, candleScan);
   const rsi = getRsiConfirmation(market.bias);
   const smartResult = buildSmartMoneyAnalysis(session, market, news, zones, confirmation, candleScan);
   const goldResult = buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session, candleScan);
   const activeResult = state.analysisMode === "gold" ? goldResult : smartResult;
-  const entryProjection = buildEntryProjection(activeResult, market, zones, confirmation, candleScan, buildLiveCandles(market));
+  const entryProjection = buildEntryProjection(activeResult, market, zones, confirmation, candleScan, liveCandles);
 
   elements.sessionName.textContent = session.name;
   elements.marketBias.textContent = activeResult.biasLabel;
@@ -1739,8 +1760,24 @@ function evaluateAndRender() {
   renderComparison(smartResult, goldResult);
   renderScenarios(market, zones, confirmation, session, entryProjection);
   renderStrategyOverlay(activeResult.direction, zones, confirmation, entryProjection);
+  renderLivePrecisionChart(liveCandles, { session, market, news, zones, confirmation, candleScan, previousHigh: Math.max(...liveCandles.slice(-24).map((candle) => candle.high)), previousLow: Math.min(...liveCandles.slice(-24).map((candle) => candle.low)), last: liveCandles[liveCandles.length - 1] }, activeResult, entryProjection);
   renderRsiPanel(rsi);
   renderCandleScanner(candleScan);
+}
+
+function getLivePrecisionCandles(market) {
+  const apiCandles = normalizeApiCandles(extractCandles({ candles: state.api.history }));
+  if (apiCandles.length >= 30) return apiCandles.slice(-220);
+  return buildLiveCandles(market);
+}
+
+function renderLivePrecisionChart(candles, context, activeResult, entryProjection) {
+  if (!state.precisionChart || state.replay.active) return;
+  if (!candles.length) {
+    drawReplayMessage("Aucune bougie live TSR disponible.");
+    return;
+  }
+  drawReplayChart(candles, context, activeResult, entryProjection);
 }
 
 function getSession() {

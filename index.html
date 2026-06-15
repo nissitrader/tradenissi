@@ -159,6 +159,9 @@
               <small id="chartInterval">H4</small>
             </div>
             <div class="toolbar-actions">
+              <button type="button" id="togglePrecisionChart" title="Basculer graphique TSR / TradingView" aria-label="Basculer graphique TSR / TradingView">
+                TSR Live
+              </button>
               <button type="button" id="refreshWidget" title="Recharger TradingView" aria-label="Recharger TradingView">↻</button>
               <button type="button" id="fullscreenChart" title="Agrandir le graphique" aria-label="Agrandir le graphique">⛶</button>
               <button type="button" class="reset-position-button" id="resetSignalPositions" title="Réinitialiser position" aria-label="Réinitialiser position">
@@ -169,7 +172,7 @@
 
           <div class="chart-frame" id="chartFrame">
             <div id="tradingview_chart"></div>
-            <canvas id="replayCanvas" class="replay-canvas" aria-label="Graphique Replay XAUUSD"></canvas>
+            <canvas id="replayCanvas" class="replay-canvas" aria-label="Graphique TSR XAUUSD"></canvas>
             <div class="strategy-overlay" id="strategyOverlay" aria-hidden="true"></div>
             <aside class="chart-signal-alert draggable-signal-card" id="chartSignalAlert" aria-live="polite" data-draggable-card="chartSignalAlert">
               <span id="chartAlertStage">Setup incomplet</span>

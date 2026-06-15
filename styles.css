@@ -513,6 +513,18 @@ button:active {
   white-space: nowrap;
 }
 
+#togglePrecisionChart {
+  width: auto;
+  min-width: 86px;
+  padding: 0 10px;
+  border-color: rgba(59, 216, 189, 0.42);
+  color: var(--teal);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .chart-frame {
   position: relative;
   min-height: 520px;
@@ -814,7 +826,12 @@ button:active {
   display: none;
 }
 
-.chart-frame.replay-active .replay-canvas {
+.chart-frame.precision-active #tradingview_chart {
+  display: none;
+}
+
+.chart-frame.replay-active .replay-canvas,
+.chart-frame.precision-active .replay-canvas {
   display: block;
 }
 
