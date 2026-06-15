@@ -69,6 +69,7 @@ const state = {
     health: null,
     signals: [],
     history: [],
+    historySource: "none",
   },
   replay: {
     active: false,
@@ -522,6 +523,8 @@ async function initTsrDataApi() {
   const health = await tsrDataRequest("health");
   if (!health.ok) {
     setApiUnavailable(health.message);
+    await loadMarketFallbackHistory(health.message);
+    evaluateAndRender();
     return;
   }
 
@@ -535,10 +538,6 @@ async function initTsrDataApi() {
 
 async function refreshLiveData() {
   if (state.replay.active) return;
-  if (!state.api.available) {
-    await initTsrDataApi();
-    return;
-  }
   await loadApiHistory();
   evaluateAndRender();
 }
@@ -553,19 +552,54 @@ async function loadApiHistory() {
   });
   if (!data.ok) {
     setApiUnavailable(data.message);
-    return [];
+    return loadMarketFallbackHistory(data.message);
   }
   const candles = normalizeApiCandles(extractCandles(data.data));
   if (!candles.length) {
     state.api.history = [];
-    elements.apiNotice.textContent = "TSR Data API connectée mais aucune bougie /history reçue — graphique TradingView direct actif.";
-    elements.apiNotice.hidden = false;
-    return [];
+    return loadMarketFallbackHistory("TSR Data API connectée mais aucune bougie /history reçue.");
   }
   state.api.available = true;
+  state.api.historySource = "tsr-data-api";
   state.api.history = candles;
   elements.apiNotice.hidden = true;
   return state.api.history;
+}
+
+async function loadMarketFallbackHistory(reason = "") {
+  const params = new URLSearchParams({
+    symbol: "XAUUSD",
+    timeframe: state.interval,
+    limit: "500",
+  });
+
+  try {
+    const response = await fetch(`/api/market/history?${params.toString()}`, {
+      headers: { accept: "application/json" },
+      cache: "no-store",
+    });
+    const data = await response.json().catch(() => ({}));
+    const candles = normalizeApiCandles(extractCandles(data));
+    if (!response.ok || candles.length < 30) {
+      state.api.history = [];
+      state.api.historySource = "none";
+      elements.apiNotice.textContent = `${reason || API_UNAVAILABLE_MESSAGE} — graphique TradingView direct actif, analyse TSR en attente de bougies.`;
+      elements.apiNotice.hidden = false;
+      return [];
+    }
+
+    state.api.history = candles;
+    state.api.historySource = "market-fallback";
+    elements.apiNotice.textContent = `${reason ? `${reason} ` : ""}TradingView visible + analyse TSR active via flux OHLCV fallback ${data.sourceSymbol || "GC=F"}.`;
+    elements.apiNotice.hidden = false;
+    return state.api.history;
+  } catch {
+    state.api.history = [];
+    state.api.historySource = "none";
+    elements.apiNotice.textContent = `${reason || API_UNAVAILABLE_MESSAGE} — graphique TradingView direct actif, analyse TSR en attente de bougies.`;
+    elements.apiNotice.hidden = false;
+    return [];
+  }
 }
 
 async function loadApiSignals() {
@@ -1902,11 +1936,15 @@ function getLivePrecisionCandles() {
 
 function renderLivePrecisionChart(candles, context, activeResult, entryProjection) {
   if (state.replay.active) return;
-  elements.chartFrame.classList.remove("tv-fallback-active");
+  elements.chartFrame.classList.toggle("tv-fallback-active", state.api.historySource === "market-fallback");
   if (!candles.length) {
     elements.chartFrame.classList.add("tv-fallback-active");
     ensureTradingViewInterval();
     drawReplayMessage("Aucune bougie live TSR disponible.");
+    return;
+  }
+  if (state.api.historySource === "market-fallback") {
+    ensureTradingViewInterval();
     return;
   }
   drawReplayChart(candles, context, activeResult, entryProjection);
