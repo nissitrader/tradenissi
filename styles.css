@@ -864,6 +864,18 @@ button:active {
   background: rgba(116, 167, 255, 0.1);
 }
 
+.overlay-idm {
+  border-color: rgba(238, 232, 207, 0.78);
+  background: rgba(238, 232, 207, 0.18);
+  color: #f4f1e8;
+}
+
+.overlay-target {
+  border-color: rgba(17, 17, 17, 0.86);
+  background: rgba(238, 232, 207, 0.22);
+  color: #f4f1e8;
+}
+
 .overlay-sell,
 .overlay-sl {
   border-color: rgba(239, 98, 98, 0.78);

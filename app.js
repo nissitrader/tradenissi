@@ -6,6 +6,8 @@ const smartMoneyOverlays = [
   { id: "liquiditySweep", label: "Liquidity Sweep", defaultOn: true },
   { id: "bos", label: "BOS", defaultOn: true },
   { id: "choch", label: "ChoCH", defaultOn: true },
+  { id: "idm", label: "IDM / Inducement", defaultOn: true },
+  { id: "target", label: "Target", defaultOn: true },
   { id: "trendlines", label: "Trendlines", defaultOn: false },
   { id: "sessions", label: "Sessions Asie / Londres / New York", defaultOn: true },
   { id: "previousHL", label: "Previous High / Previous Low", defaultOn: true },
@@ -914,6 +916,24 @@ function drawReplayChart(candles, context, activeResult, entryProjection) {
   const plotWidth = Math.max(120, rect.width - leftPadding - rightPadding);
   const priceToY = (price) => ((max - price) / priceRange) * (rect.height - topPadding - bottomPadding) + topPadding;
   const candleWidth = Math.max(5, plotWidth / visible.length);
+  const visibleStartIndex = candles.length - visible.length;
+  const candleToX = (absoluteIndex) => {
+    const localIndex = clamp(absoluteIndex - visibleStartIndex, 0, visible.length - 1);
+    return leftPadding + localIndex * candleWidth + candleWidth / 2;
+  };
+  const geometry = {
+    visible,
+    visibleStartIndex,
+    priceToY,
+    candleToX,
+    leftPadding,
+    rightPadding,
+    topPadding,
+    bottomPadding,
+    candleWidth,
+    plotWidth,
+    plotRight: leftPadding + plotWidth,
+  };
 
   drawReplayGrid(ctx, rect);
   visible.forEach((candle, index) => {
@@ -944,7 +964,7 @@ function drawReplayChart(candles, context, activeResult, entryProjection) {
     }
   });
 
-  drawReplayOverlays(ctx, rect, context, activeResult, priceToY, entryProjection);
+  drawReplayOverlays(ctx, rect, context, activeResult, geometry, entryProjection);
 }
 
 function drawReplayMessage(message) {
@@ -979,54 +999,181 @@ function drawReplayGrid(ctx, rect) {
   }
 }
 
-function drawReplayOverlays(ctx, rect, context, activeResult, priceToY, entryProjection) {
+function drawReplayOverlays(ctx, rect, context, activeResult, geometry, entryProjection) {
   const visible = state.smartMoneyVisibility;
+  const { priceToY, candleToX, visible: candles, visibleStartIndex, plotRight } = geometry;
   const highY = priceToY(context.previousHigh);
   const lowY = priceToY(context.previousLow);
+  const lastIndex = visibleStartIndex + candles.length - 1;
+  const swingHighIndex = findSwingIndex(candles, "high") + visibleStartIndex;
+  const swingLowIndex = findSwingIndex(candles, "low") + visibleStartIndex;
+  const ob = getReplayOrderBlockZone(candles, context.market.bias, visibleStartIndex);
+  const fvg = getReplayFvgZone(candles, context.market.bias, visibleStartIndex);
 
   if (visible.orderBlocks) {
-    ctx.fillStyle = "rgba(231, 184, 78, 0.14)";
-    ctx.strokeStyle = "rgba(231, 184, 78, 0.72)";
-    ctx.strokeRect(rect.width * 0.56, priceToY(context.last.close + 3), rect.width * 0.22, 42);
-    ctx.fillRect(rect.width * 0.56, priceToY(context.last.close + 3), rect.width * 0.22, 42);
+    drawPriceTimeZone(ctx, ob, geometry, {
+      label: "OB",
+      fill: "rgba(231, 184, 78, 0.16)",
+      stroke: "rgba(231, 184, 78, 0.72)",
+    });
   }
-  if (visible.fvg) {
-    ctx.fillStyle = "rgba(59, 216, 189, 0.12)";
-    ctx.fillRect(rect.width * 0.34, priceToY(context.last.close + 1.8), rect.width * 0.16, 34);
+  if (visible.fvg && fvg) {
+    drawPriceTimeZone(ctx, fvg, geometry, {
+      label: "FVG",
+      fill: "rgba(59, 216, 189, 0.13)",
+      stroke: "rgba(59, 216, 189, 0.68)",
+    });
   }
   if (visible.equalHigh || visible.previousHL) drawReplayLine(ctx, highY, "#74a7ff", "Previous High / EQH", rect);
   if (visible.equalLow || visible.previousHL) drawReplayLine(ctx, lowY, "#74a7ff", "Previous Low / EQL", rect);
-  if (visible.liquiditySweep && context.zones.liquidityTaken) drawReplayLabel(ctx, rect.width * 0.72, highY - 18, "Sweep", "#74a7ff");
-  if (visible.bos && context.confirmation.choch) drawReplayLabel(ctx, rect.width * 0.48, rect.height * 0.37, "BOS", "#46d17b");
-  if (visible.choch && context.confirmation.choch) drawReplayLabel(ctx, rect.width * 0.6, rect.height * 0.52, "ChoCH", "#e7b84e");
+  if (visible.liquiditySweep && context.zones.liquidityTaken) {
+    const sweepIndex = context.market.bias === "SELL" ? swingHighIndex : swingLowIndex;
+    const sweepPrice = context.market.bias === "SELL" ? context.previousHigh : context.previousLow;
+    drawReplayLabel(ctx, candleToX(sweepIndex) + 8, priceToY(sweepPrice) - 18, "Sweep", "#74a7ff");
+  }
+  if (visible.bos && context.confirmation.choch) {
+    const bosY = context.market.bias === "SELL" ? lowY : highY;
+    drawAnchoredSegment(ctx, candleToX(swingLowIndex), bosY, candleToX(lastIndex), bosY, "#46d17b", "BOS");
+  }
+  if (visible.choch && context.confirmation.choch) {
+    const chochIndex = Math.max(visibleStartIndex, lastIndex - 8);
+    const chochY = priceToY(context.last.close);
+    drawAnchoredSegment(ctx, candleToX(chochIndex), chochY, candleToX(lastIndex), chochY, "#e7b84e", "ChoCH");
+  }
+  if (visible.idm) {
+    const idmIndex = Math.max(visibleStartIndex, lastIndex - 18);
+    const idmPrice = candles[Math.max(0, candles.length - 18)]?.close || context.last.close;
+    drawAnchoredSegment(ctx, candleToX(idmIndex), priceToY(idmPrice), candleToX(Math.min(lastIndex, idmIndex + 8)), priceToY(idmPrice), "#101010", "IDM");
+  }
+  if (visible.target) {
+    const targetPrice = context.market.bias === "SELL" ? context.previousLow : context.previousHigh;
+    drawAnchoredSegment(ctx, candleToX(Math.max(visibleStartIndex, lastIndex - 24)), priceToY(targetPrice), Math.min(plotRight, candleToX(lastIndex) + 80), priceToY(targetPrice), "#111", "Target");
+  }
   if (visible.trendlines) {
     ctx.strokeStyle = "rgba(116, 167, 255, 0.75)";
     ctx.beginPath();
-    ctx.moveTo(rect.width * 0.18, rect.height * 0.68);
-    ctx.lineTo(rect.width * 0.76, rect.height * 0.48);
+    ctx.moveTo(candleToX(Math.max(visibleStartIndex, lastIndex - 42)), priceToY(context.previousLow));
+    ctx.lineTo(candleToX(lastIndex), priceToY(context.last.close));
     ctx.stroke();
   }
-  drawReplayEntryProjection(ctx, rect, entryProjection, priceToY);
+  drawReplayEntryProjection(ctx, rect, entryProjection, geometry);
 }
 
-function drawReplayEntryProjection(ctx, rect, projection, priceToY) {
+function findSwingIndex(candles, field) {
+  if (!candles.length) return 0;
+  let bestIndex = 0;
+  candles.forEach((candle, index) => {
+    if (field === "high" && candle.high > candles[bestIndex].high) bestIndex = index;
+    if (field === "low" && candle.low < candles[bestIndex].low) bestIndex = index;
+  });
+  return bestIndex;
+}
+
+function getReplayOrderBlockZone(candles, direction, visibleStartIndex) {
+  const search = candles.slice(-34);
+  const offset = candles.length - search.length;
+  const targetIsBearish = direction === "BUY";
+  const foundIndex = search
+    .map((candle, index) => ({ candle, index }))
+    .reverse()
+    .find(({ candle }) => targetIsBearish ? candle.close < candle.open : candle.close > candle.open)?.index ?? Math.max(0, search.length - 12);
+  const absoluteIndex = visibleStartIndex + offset + foundIndex;
+  const candle = search[foundIndex] || candles[candles.length - 1];
+  const height = Math.max(Math.abs(candle.open - candle.close), (candle.high - candle.low) * 0.45, 1.2);
+  const top = Math.max(candle.open, candle.close) + height * 0.35;
+  const bottom = Math.min(candle.open, candle.close) - height * 0.35;
+
+  return {
+    startIndex: absoluteIndex,
+    endIndex: visibleStartIndex + candles.length - 1,
+    top,
+    bottom,
+  };
+}
+
+function getReplayFvgZone(candles, direction, visibleStartIndex) {
+  for (let index = candles.length - 1; index >= 2; index -= 1) {
+    const before = candles[index - 2];
+    const current = candles[index];
+    if (direction === "BUY" && current.low > before.high) {
+      return {
+        startIndex: visibleStartIndex + index - 2,
+        endIndex: visibleStartIndex + candles.length - 1,
+        top: current.low,
+        bottom: before.high,
+      };
+    }
+    if (direction === "SELL" && current.high < before.low) {
+      return {
+        startIndex: visibleStartIndex + index - 2,
+        endIndex: visibleStartIndex + candles.length - 1,
+        top: before.low,
+        bottom: current.high,
+      };
+    }
+  }
+  return null;
+}
+
+function drawPriceTimeZone(ctx, zone, geometry, options) {
+  if (!zone) return;
+  const { priceToY, candleToX, candleWidth, plotRight } = geometry;
+  const left = candleToX(zone.startIndex) - candleWidth * 0.45;
+  const right = Math.min(plotRight, candleToX(zone.endIndex) + candleWidth * 0.45);
+  const top = priceToY(zone.top);
+  const bottom = priceToY(zone.bottom);
+  const y = Math.min(top, bottom);
+  const height = Math.max(10, Math.abs(bottom - top));
+  const width = Math.max(24, right - left);
+
+  ctx.fillStyle = options.fill;
+  ctx.strokeStyle = options.stroke;
+  ctx.lineWidth = 1;
+  ctx.fillRect(left, y, width, height);
+  ctx.strokeRect(left, y, width, height);
+  ctx.fillStyle = "#111";
+  ctx.font = "800 11px ui-sans-serif, system-ui";
+  ctx.fillText(options.label, left + width / 2 - 10, y + 16);
+}
+
+function drawAnchoredSegment(ctx, x1, y1, x2, y2, color, label) {
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  ctx.font = "800 11px ui-sans-serif, system-ui";
+  ctx.fillText(label, Math.min(x1, x2) + Math.abs(x2 - x1) / 2 + 6, y1 - 5);
+}
+
+function drawReplayEntryProjection(ctx, rect, projection, geometry) {
   if (!projection || projection.direction === "WAIT") return;
   const visible = state.smartMoneyVisibility;
+  const { priceToY, candleToX, visibleStartIndex } = geometry;
   const isBuy = projection.direction === "BUY";
   const color = isBuy ? "#46d17b" : "#ef6262";
-  const zoneY = isBuy ? rect.height * 0.58 : rect.height * 0.28;
+  const entry = parsePrice(projection.setup.entry);
+  const sl = parsePrice(projection.setup.sl);
+  const tp1 = parsePrice(projection.setup.tp1);
+  const zoneY = Number.isFinite(entry) ? priceToY(entry) : isBuy ? rect.height * 0.58 : rect.height * 0.28;
+  const zoneTop = Number.isFinite(sl) ? Math.min(zoneY, priceToY(sl)) : zoneY;
+  const zoneHeight = Number.isFinite(sl) ? Math.max(32, Math.abs(priceToY(sl) - zoneY)) : 48;
+  const zoneLeft = candleToX(visibleStartIndex + Math.max(6, geometry.visible.length - 18));
+  const zoneWidth = Math.max(90, rect.width - zoneLeft - 112);
   const stageRank = { future: 1, potential: 2, imminent: 3, confirmed: 4 }[projection.stage] || 0;
 
   if ((visible.entryZones || visible.futureZones) && visible.futureZones && stageRank >= 1) {
     ctx.fillStyle = isBuy ? "rgba(70, 209, 123, 0.08)" : "rgba(239, 98, 98, 0.08)";
     ctx.strokeStyle = isBuy ? "rgba(70, 209, 123, 0.34)" : "rgba(239, 98, 98, 0.34)";
-    ctx.strokeRect(rect.width * 0.56, zoneY, rect.width * 0.24, 48);
-    ctx.fillRect(rect.width * 0.56, zoneY, rect.width * 0.24, 48);
-    drawReplayLabel(ctx, rect.width * 0.57, zoneY - 28, `Zone potentielle ${projection.direction}`, color);
+    ctx.strokeRect(zoneLeft, zoneTop, zoneWidth, zoneHeight);
+    ctx.fillRect(zoneLeft, zoneTop, zoneWidth, zoneHeight);
+    drawReplayLabel(ctx, zoneLeft + 8, zoneTop - 28, `Zone potentielle ${projection.direction}`, color);
   }
-  if (visible.potentialEntries && stageRank >= 2) drawReplayLabel(ctx, rect.width * 0.58, zoneY + 56, "Entrée potentielle — attendre réaction", "#e7b84e");
-  if (visible.imminentEntries && stageRank >= 3) drawReplayLabel(ctx, rect.width * 0.58, zoneY + 88, "Entrée imminente — prépare-toi", color);
-  if (visible.confirmedSignals && stageRank >= 4) drawReplayLabel(ctx, rect.width * 0.58, zoneY + 120, `${projection.direction} confirmé`, color);
+  if (visible.potentialEntries && stageRank >= 2) drawReplayLabel(ctx, zoneLeft + 8, zoneTop + zoneHeight + 8, "Entrée potentielle — attendre réaction", "#e7b84e");
+  if (visible.imminentEntries && stageRank >= 3) drawReplayLabel(ctx, zoneLeft + 8, zoneTop + zoneHeight + 38, "Entrée imminente — prépare-toi", color);
+  if (visible.confirmedSignals && stageRank >= 4) drawReplayLabel(ctx, zoneLeft + 8, Number.isFinite(tp1) ? priceToY(tp1) - 24 : zoneTop + zoneHeight + 68, `${projection.direction} confirmé`, color);
 
   const showPositionTool = stageRank >= 4 && ((isBuy && visible.longPositionTool) || (!isBuy && visible.shortPositionTool));
   if (showPositionTool) drawReplayPositionTool(ctx, rect, projection, priceToY, color);
@@ -2295,6 +2442,11 @@ function addPositionToolItem(items, projection, top, sideClass) {
 }
 
 function renderStrategyOverlay(direction, zones, confirmation, entryProjection) {
+  if (!state.replay.active) {
+    clearStrategyOverlay();
+    return;
+  }
+
   const visible = state.smartMoneyVisibility;
   const classic = state.classicVisibility;
   const items = [];
@@ -2311,6 +2463,8 @@ function renderStrategyOverlay(direction, zones, confirmation, entryProjection) 
   if (visible.liquiditySweep) items.push({ className: "overlay-liq", label: "Sweep", style: "left: 70%; top: 17%;" });
   if (visible.bos) items.push({ className: "overlay-buy", label: "BOS", style: "left: 48%; top: 38%;" });
   if (visible.choch) items.push({ className: confirmation.valid ? "overlay-buy" : "overlay-sell", label: "ChoCH", style: "left: 62%; top: 51%;" });
+  if (visible.idm) items.push({ className: "overlay-idm overlay-line", label: "IDM", style: "left: 42%; top: 29%; width: 18%;" });
+  if (visible.target) items.push({ className: "overlay-target overlay-line", label: "Target", style: "left: 49%; top: 76%; width: 32%;" });
   if (visible.trendlines) items.push({ className: "overlay-liq overlay-line", label: "", style: "left: 22%; top: 61%; width: 47%; transform: rotate(-9deg);" });
   if (visible.previousHL) {
     items.push({ className: "overlay-tp overlay-line", label: "", style: "left: 10%; top: 14%; width: 78%;" });
