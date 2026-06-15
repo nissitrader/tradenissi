@@ -31,6 +31,7 @@ const classicIndicators = [
 ];
 
 const API_UNAVAILABLE_MESSAGE = "API locale indisponible — vérifiez que votre PC, npm start et Cloudflare Tunnel sont actifs.";
+const DRAG_STORAGE_KEY = "tsr-draggable-signal-card-positions";
 
 const state = {
   interval: "240",
@@ -83,6 +84,7 @@ const elements = {
   chartDecisionBadges: document.getElementById("chartDecisionBadges"),
   chartDecisionFill: document.getElementById("chartDecisionFill"),
   chartDecisionScore: document.getElementById("chartDecisionScore"),
+  resetSignalPositions: document.getElementById("resetSignalPositions"),
   overlayControls: document.getElementById("overlayControls"),
   strategyOverlay: document.getElementById("strategyOverlay"),
   replayCanvas: document.getElementById("replayCanvas"),
@@ -137,6 +139,7 @@ function boot() {
   initReplayDefaults();
   renderOverlayControls();
   bindInteractions();
+  initDraggableSignalCards();
   renderTradingView();
   loadDailyNews();
   initTsrDataApi();
@@ -311,6 +314,117 @@ function bindInteractions() {
     document.querySelector(".chart-desk").classList.toggle("chart-fullscreen");
     setTimeout(renderTradingView, 120);
   });
+  elements.resetSignalPositions.addEventListener("click", resetDraggableSignalCards);
+}
+
+function initDraggableSignalCards() {
+  const cards = getDraggableSignalCards();
+  const savedPositions = readDraggablePositions();
+  cards.forEach((card) => {
+    const savedPosition = savedPositions[card.dataset.draggableCard];
+    if (savedPosition) applyDraggablePosition(card, savedPosition);
+    card.addEventListener("pointerdown", startSignalCardDrag);
+  });
+}
+
+function getDraggableSignalCards() {
+  return [elements.chartSignalAlert, elements.chartDecisionCard].filter(Boolean);
+}
+
+function startSignalCardDrag(event) {
+  if (event.button !== undefined && event.button !== 0) return;
+  const card = event.currentTarget;
+  const rect = card.getBoundingClientRect();
+  const width = rect.width;
+  const height = rect.height;
+  const startLeft = rect.left;
+  const startTop = rect.top;
+  const startX = event.clientX;
+  const startY = event.clientY;
+
+  event.preventDefault();
+  card.setPointerCapture?.(event.pointerId);
+  card.classList.add("dragging", "user-positioned");
+  document.body.classList.add("dragging-signal-card");
+  applyDraggablePosition(card, { left: startLeft, top: startTop, width });
+
+  function moveCard(moveEvent) {
+    moveEvent.preventDefault();
+    const left = clamp(startLeft + moveEvent.clientX - startX, 0, Math.max(0, window.innerWidth - width));
+    const top = clamp(startTop + moveEvent.clientY - startY, 0, Math.max(0, window.innerHeight - height));
+    card.style.left = `${left}px`;
+    card.style.top = `${top}px`;
+  }
+
+  function finishDrag(upEvent) {
+    card.releasePointerCapture?.(upEvent.pointerId);
+    card.classList.remove("dragging");
+    document.body.classList.remove("dragging-signal-card");
+    document.removeEventListener("pointermove", moveCard);
+    document.removeEventListener("pointerup", finishDrag);
+    document.removeEventListener("pointercancel", finishDrag);
+    saveDraggablePosition(card);
+  }
+
+  document.addEventListener("pointermove", moveCard, { passive: false });
+  document.addEventListener("pointerup", finishDrag);
+  document.addEventListener("pointercancel", finishDrag);
+}
+
+function applyDraggablePosition(card, position) {
+  const width = Math.min(Number(position.width) || card.getBoundingClientRect().width, window.innerWidth - 16);
+  const left = clamp(Number(position.left) || 0, 0, Math.max(0, window.innerWidth - width));
+  const top = clamp(Number(position.top) || 0, 0, Math.max(0, window.innerHeight - card.getBoundingClientRect().height));
+
+  card.classList.add("user-positioned");
+  card.style.position = "fixed";
+  card.style.left = `${left}px`;
+  card.style.top = `${top}px`;
+  card.style.right = "auto";
+  card.style.bottom = "auto";
+  card.style.width = `${width}px`;
+}
+
+function saveDraggablePosition(card) {
+  const key = card.dataset.draggableCard;
+  if (!key) return;
+  const rect = card.getBoundingClientRect();
+  const positions = readDraggablePositions();
+  positions[key] = {
+    left: Math.round(rect.left),
+    top: Math.round(rect.top),
+    width: Math.round(rect.width),
+  };
+  writeDraggablePositions(positions);
+}
+
+function resetDraggableSignalCards() {
+  try {
+    localStorage.removeItem(DRAG_STORAGE_KEY);
+  } catch {
+    // Reset still works visually even if localStorage is blocked.
+  }
+  getDraggableSignalCards().forEach((card) => {
+    card.classList.remove("dragging", "user-positioned");
+    card.removeAttribute("style");
+  });
+  document.body.classList.remove("dragging-signal-card");
+}
+
+function readDraggablePositions() {
+  try {
+    return JSON.parse(localStorage.getItem(DRAG_STORAGE_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function writeDraggablePositions(positions) {
+  try {
+    localStorage.setItem(DRAG_STORAGE_KEY, JSON.stringify(positions));
+  } catch {
+    // localStorage can be unavailable in restrictive browser modes.
+  }
 }
 
 function applyLayout(layout) {

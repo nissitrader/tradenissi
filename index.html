@@ -149,6 +149,9 @@
             <div class="toolbar-actions">
               <button type="button" id="refreshWidget" title="Recharger TradingView" aria-label="Recharger TradingView">↻</button>
               <button type="button" id="fullscreenChart" title="Agrandir le graphique" aria-label="Agrandir le graphique">⛶</button>
+              <button type="button" class="reset-position-button" id="resetSignalPositions" title="Réinitialiser position" aria-label="Réinitialiser position">
+                Réinitialiser position
+              </button>
             </div>
           </div>
 
@@ -156,12 +159,12 @@
             <div id="tradingview_chart"></div>
             <canvas id="replayCanvas" class="replay-canvas" aria-label="Graphique Replay XAUUSD"></canvas>
             <div class="strategy-overlay" id="strategyOverlay" aria-hidden="true"></div>
-            <aside class="chart-signal-alert" id="chartSignalAlert" aria-live="polite">
+            <aside class="chart-signal-alert draggable-signal-card" id="chartSignalAlert" aria-live="polite" data-draggable-card="chartSignalAlert">
               <span id="chartAlertStage">Setup incomplet</span>
               <strong id="chartAlertDirection">ATTENTE</strong>
               <small id="chartAlertReason">Initialisation de l'analyse.</small>
             </aside>
-            <aside class="chart-decision-card" id="chartDecisionCard" aria-live="polite">
+            <aside class="chart-decision-card draggable-signal-card" id="chartDecisionCard" aria-live="polite" data-draggable-card="chartDecisionCard">
               <span id="chartDecisionStage">Setup incomplet</span>
               <small id="chartDecisionMode">TSR Smart Money</small>
               <strong id="chartDecisionDirection">ATTENTE</strong>

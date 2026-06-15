@@ -470,6 +470,17 @@ button:active {
   border-radius: 7px;
 }
 
+.toolbar-actions .reset-position-button {
+  width: auto;
+  min-width: 0;
+  padding: 0 10px;
+  color: var(--gold);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .chart-frame {
   position: relative;
   min-height: 520px;
@@ -491,6 +502,26 @@ button:active {
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.52);
   pointer-events: none;
   backdrop-filter: blur(10px);
+}
+
+.draggable-signal-card {
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+}
+
+.draggable-signal-card.user-positioned {
+  z-index: 1100;
+}
+
+.draggable-signal-card.dragging {
+  cursor: grabbing;
+  z-index: 1200;
+}
+
+.dragging-signal-card {
+  cursor: grabbing;
 }
 
 .chart-signal-alert span {
