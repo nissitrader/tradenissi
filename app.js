@@ -168,6 +168,10 @@ function renderTradingView() {
       "mainSeriesProperties.candleStyle.borderDownColor": "#ffc1c1",
       "mainSeriesProperties.candleStyle.wickUpColor": "#2ee58a",
       "mainSeriesProperties.candleStyle.wickDownColor": "#ff5b5b",
+      "mainSeriesProperties.candleStyle.drawWick": true,
+      "mainSeriesProperties.candleStyle.drawBorder": true,
+      "timeScale.rightOffset": 18,
+      "timeScale.barSpacing": 8,
       "paneProperties.background": "#090a08",
       "paneProperties.vertGridProperties.color": "rgba(238, 232, 207, 0.08)",
       "paneProperties.horzGridProperties.color": "rgba(238, 232, 207, 0.08)",
@@ -748,16 +752,21 @@ function drawReplayChart(candles, context, activeResult, entryProjection) {
   const max = high + padding;
   const min = low - padding;
   const priceRange = Math.max(0.0001, max - min);
-  const priceToY = (price) => ((max - price) / priceRange) * (rect.height - 36) + 18;
-  const candleWidth = Math.max(4, (rect.width - 58) / visible.length);
+  const topPadding = 26;
+  const bottomPadding = 34;
+  const leftPadding = 18;
+  const rightPadding = 92;
+  const plotWidth = Math.max(120, rect.width - leftPadding - rightPadding);
+  const priceToY = (price) => ((max - price) / priceRange) * (rect.height - topPadding - bottomPadding) + topPadding;
+  const candleWidth = Math.max(5, plotWidth / visible.length);
 
   drawReplayGrid(ctx, rect);
   visible.forEach((candle, index) => {
-    const x = 14 + index * candleWidth + candleWidth / 2;
-    const openY = priceToY(candle.open);
-    const closeY = priceToY(candle.close);
-    const highY = priceToY(candle.high);
-    const lowY = priceToY(candle.low);
+    const x = leftPadding + index * candleWidth + candleWidth / 2;
+    const openY = clamp(priceToY(candle.open), topPadding, rect.height - bottomPadding);
+    const closeY = clamp(priceToY(candle.close), topPadding, rect.height - bottomPadding);
+    const highY = clamp(priceToY(candle.high), topPadding, rect.height - bottomPadding);
+    const lowY = clamp(priceToY(candle.low), topPadding, rect.height - bottomPadding);
     const bullish = candle.close >= candle.open;
     ctx.strokeStyle = bullish ? "#46d17b" : "#ef6262";
     ctx.fillStyle = bullish ? "rgba(70, 209, 123, 0.72)" : "rgba(239, 98, 98, 0.72)";
