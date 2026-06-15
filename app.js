@@ -59,6 +59,8 @@ const state = {
   classicVisibility: Object.fromEntries(classicIndicators.map((item) => [item.id, item.defaultOn])),
   tick: 0,
   basePrice: 2336.4,
+  widget: null,
+  tvInterval: "",
   lastNewsLoad: null,
   newsEvents: [],
   api: {
@@ -166,10 +168,58 @@ function boot() {
   renderOverlayControls();
   bindInteractions();
   initDraggableSignalCards();
+  renderTradingView();
   loadDailyNews();
   initTsrDataApi();
   evaluateAndRender();
   window.setInterval(evaluateAndRender, 4500);
+  window.setInterval(refreshLiveData, 15000);
+}
+
+function renderTradingView() {
+  const target = document.getElementById("tradingview_chart");
+  if (!target) return;
+  target.innerHTML = "";
+
+  if (!window.TradingView) {
+    target.innerHTML = '<div class="tv-fallback">TradingView direct indisponible</div>';
+    return;
+  }
+
+  state.tvInterval = state.interval;
+  state.widget = new window.TradingView.widget({
+    autosize: true,
+    symbol: "OANDA:XAUUSD",
+    interval: state.interval,
+    timezone: "Etc/UTC",
+    theme: "dark",
+    style: "1",
+    locale: "fr",
+    enable_publishing: false,
+    allow_symbol_change: false,
+    hide_side_toolbar: false,
+    details: true,
+    calendar: false,
+    support_host: "https://www.tradingview.com",
+    container_id: "tradingview_chart",
+    overrides: {
+      "mainSeriesProperties.candleStyle.upColor": "#2ee58a",
+      "mainSeriesProperties.candleStyle.downColor": "#ff5b5b",
+      "mainSeriesProperties.candleStyle.borderUpColor": "#b7ffd6",
+      "mainSeriesProperties.candleStyle.borderDownColor": "#ffc1c1",
+      "mainSeriesProperties.candleStyle.wickUpColor": "#2ee58a",
+      "mainSeriesProperties.candleStyle.wickDownColor": "#ff5b5b",
+      "mainSeriesProperties.candleStyle.drawWick": true,
+      "mainSeriesProperties.candleStyle.drawBorder": true,
+      "paneProperties.background": "#090a08",
+      "paneProperties.vertGridProperties.color": "rgba(238, 232, 207, 0.08)",
+      "paneProperties.horzGridProperties.color": "rgba(238, 232, 207, 0.08)",
+    },
+  });
+}
+
+function ensureTradingViewInterval() {
+  if (state.tvInterval !== state.interval) renderTradingView();
 }
 
 function renderOverlayControls() {
@@ -212,6 +262,7 @@ function bindInteractions() {
       state.interval = button.dataset.interval;
       state.intervalLabel = button.textContent.trim();
       elements.chartInterval.textContent = state.intervalLabel;
+      ensureTradingViewInterval();
       evaluateAndRender();
       if (state.api.available) loadApiHistory().then(evaluateAndRender);
     });
@@ -283,11 +334,8 @@ function bindInteractions() {
   });
 
   document.getElementById("refreshWidget").addEventListener("click", () => {
-    if (state.api.available) {
-      loadApiHistory().then(evaluateAndRender);
-      return;
-    }
-    evaluateAndRender();
+    renderTradingView();
+    refreshLiveData();
   });
   document.getElementById("fullscreenChart").addEventListener("click", () => {
     document.querySelector(".chart-desk").classList.toggle("chart-fullscreen");
@@ -485,6 +533,16 @@ async function initTsrDataApi() {
   evaluateAndRender();
 }
 
+async function refreshLiveData() {
+  if (state.replay.active) return;
+  if (!state.api.available) {
+    await initTsrDataApi();
+    return;
+  }
+  await loadApiHistory();
+  evaluateAndRender();
+}
+
 async function loadApiHistory() {
   const data = await tsrDataRequest("history", {
     params: {
@@ -497,7 +555,16 @@ async function loadApiHistory() {
     setApiUnavailable(data.message);
     return [];
   }
-  state.api.history = data.data.candles || [];
+  const candles = normalizeApiCandles(extractCandles(data.data));
+  if (!candles.length) {
+    state.api.history = [];
+    elements.apiNotice.textContent = "TSR Data API connectée mais aucune bougie /history reçue — graphique TradingView direct actif.";
+    elements.apiNotice.hidden = false;
+    return [];
+  }
+  state.api.available = true;
+  state.api.history = candles;
+  elements.apiNotice.hidden = true;
   return state.api.history;
 }
 
@@ -561,6 +628,7 @@ async function tsrDataRequest(endpoint, options = {}) {
     const response = await fetch(`/api/tsr-data/${endpoint}${query ? `?${query}` : ""}`, {
       method,
       headers: { "content-type": "application/json" },
+      cache: "no-store",
       body: method === "POST" ? JSON.stringify(options.body || {}) : undefined,
     });
     const data = await response.json().catch(() => ({}));
@@ -587,7 +655,7 @@ async function tsrDataRequest(endpoint, options = {}) {
 function setApiUnavailable(message) {
   state.api.available = false;
   state.api.message = message || API_UNAVAILABLE_MESSAGE;
-  elements.apiNotice.textContent = state.api.message;
+  elements.apiNotice.textContent = `${state.api.message} — graphique TradingView direct actif. Les overlays TSR reprendront dès que les bougies API seront disponibles.`;
   elements.apiNotice.hidden = false;
 }
 
@@ -649,6 +717,7 @@ function toggleReplayMode() {
 }
 
 async function resetReplaySession() {
+  elements.chartFrame.classList.remove("tv-fallback-active");
   state.replay.date = elements.replayDate.value || state.replay.date;
   state.replay.timeframe = elements.replayTimeframe.value;
   state.replay.loading = true;
@@ -729,6 +798,7 @@ function stepReplay(delta) {
 }
 
 function evaluateReplayAndRender() {
+  elements.chartFrame.classList.remove("tv-fallback-active");
   if (!state.replay.candles.length) {
     const message = state.api.message || API_UNAVAILABLE_MESSAGE;
     elements.replayStatus.textContent = message;
@@ -1735,12 +1805,8 @@ function average(values) {
 
 async function loadDailyNews() {
   const todayKey = new Date().toISOString().slice(0, 10);
-  const cacheKey = "xauusd-news-cache";
-  const cached = safeJson(localStorage.getItem(cacheKey));
 
-  if (cached?.date === todayKey) {
-    state.newsEvents = cached.events || [];
-    state.lastNewsLoad = cached.date;
+  if (state.lastNewsLoad === todayKey) {
     return;
   }
 
@@ -1760,9 +1826,8 @@ async function loadDailyNews() {
       })
       .slice(0, 12);
     state.lastNewsLoad = todayKey;
-    localStorage.setItem(cacheKey, JSON.stringify({ date: todayKey, events: state.newsEvents }));
   } catch {
-    state.newsEvents = cached?.events || [];
+    state.newsEvents = [];
   }
 }
 
@@ -1837,7 +1902,10 @@ function getLivePrecisionCandles() {
 
 function renderLivePrecisionChart(candles, context, activeResult, entryProjection) {
   if (state.replay.active) return;
+  elements.chartFrame.classList.remove("tv-fallback-active");
   if (!candles.length) {
+    elements.chartFrame.classList.add("tv-fallback-active");
+    ensureTradingViewInterval();
     drawReplayMessage("Aucune bougie live TSR disponible.");
     return;
   }
@@ -1845,6 +1913,8 @@ function renderLivePrecisionChart(candles, context, activeResult, entryProjectio
 }
 
 function renderNoLiveCandlesState(session, market, news, zones) {
+  elements.chartFrame.classList.add("tv-fallback-active");
+  ensureTradingViewInterval();
   const candleScan = buildEmptyCandleScan();
   const confirmation = {
     valid: false,
@@ -1873,10 +1943,10 @@ function renderNoLiveCandlesState(session, market, news, zones) {
     h1Direction: "Indisponible",
     m15Direction: "Indisponible",
     signalLifecycleStatus: "en attente",
-    blockingReason: "Aucune bougie live TSR Data API disponible",
-    confirmationSummary: "Analyse suspendue tant que /history ne renvoie pas de bougies",
-    reason: "Aucun trade qualifié — attente de bougies live TSR Data API.",
-    badges: [["En attente", "pending"], ["Données live", "risk"]],
+    blockingReason: "Bougies TSR indisponibles, graphique TradingView direct actif",
+    confirmationSummary: "Analyse TSR suspendue tant que /history ne renvoie pas de bougies",
+    reason: "Aucun trade qualifié — TradingView direct affiché en attendant les bougies TSR.",
+    badges: [["TradingView direct", "pending"], ["Overlays TSR en attente", "risk"]],
     blocks: [
       ["Météo du marché", false, "Indisponible sans bougies live"],
       ["Zones clés", false, "Aucune zone calculée sans données OHLC réelles"],
@@ -1891,7 +1961,7 @@ function renderNoLiveCandlesState(session, market, news, zones) {
     setup,
     metrics: buildPositionMetrics("WAIT", setup, "none", []),
     statusLabel: "Aucun trade qualifié",
-    reason: "Aucune bougie live TSR Data API — vérifiez que votre PC, npm start et Cloudflare Tunnel sont actifs.",
+    reason: "Graphique TradingView direct actif — les overlays TSR reprendront quand /history renverra des bougies.",
   };
 
   elements.sessionName.textContent = session.name;
@@ -1924,9 +1994,8 @@ function renderNoLiveCandlesState(session, market, news, zones) {
 
   renderBlocks(activeResult.blocks);
   renderComparison(activeResult, activeResult);
-  elements.scenarioList.innerHTML = "<article><strong>Aucune zone live</strong><span>Le graphique attend des bougies réelles depuis TSR Data API /history.</span></article>";
+  elements.scenarioList.innerHTML = "<article><strong>Graphique direct actif</strong><span>TradingView affiche XAUUSD en direct. Les zones TSR attendent les bougies /history.</span></article>";
   clearStrategyOverlay();
-  drawReplayMessage("Aucune bougie live TSR Data API disponible.");
   renderRsiPanel({ value: "--", values: [], valid: false, label: "RSI en attente" });
   renderCandleScanner(candleScan);
 }

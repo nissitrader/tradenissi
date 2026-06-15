@@ -800,6 +800,12 @@ button:active {
   filter: drop-shadow(0 0 6px rgba(231, 184, 78, 0.4));
 }
 
+#tradingview_chart {
+  position: absolute;
+  inset: 0;
+  display: none;
+}
+
 .replay-canvas {
   position: absolute;
   inset: 0;
@@ -807,6 +813,14 @@ button:active {
   width: 100%;
   height: 100%;
   background: #090a08;
+}
+
+.chart-frame.tv-fallback-active #tradingview_chart {
+  display: block;
+}
+
+.chart-frame.tv-fallback-active .replay-canvas {
+  display: none;
 }
 
 .tv-fallback {
