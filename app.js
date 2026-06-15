@@ -75,6 +75,14 @@ const elements = {
   chartAlertStage: document.getElementById("chartAlertStage"),
   chartAlertDirection: document.getElementById("chartAlertDirection"),
   chartAlertReason: document.getElementById("chartAlertReason"),
+  chartDecisionCard: document.getElementById("chartDecisionCard"),
+  chartDecisionStage: document.getElementById("chartDecisionStage"),
+  chartDecisionMode: document.getElementById("chartDecisionMode"),
+  chartDecisionDirection: document.getElementById("chartDecisionDirection"),
+  chartDecisionReason: document.getElementById("chartDecisionReason"),
+  chartDecisionBadges: document.getElementById("chartDecisionBadges"),
+  chartDecisionFill: document.getElementById("chartDecisionFill"),
+  chartDecisionScore: document.getElementById("chartDecisionScore"),
   overlayControls: document.getElementById("overlayControls"),
   strategyOverlay: document.getElementById("strategyOverlay"),
   replayCanvas: document.getElementById("replayCanvas"),
@@ -1902,6 +1910,21 @@ function renderChartSignalAlert(activeResult, entryProjection) {
   elements.chartAlertStage.textContent = entryProjection.statusLabel;
   elements.chartAlertDirection.textContent = direction;
   elements.chartAlertReason.textContent = buildChartAlertReason(activeResult, entryProjection);
+  renderChartDecisionCard(activeResult, entryProjection);
+}
+
+function renderChartDecisionCard(activeResult, entryProjection) {
+  const direction = activeResult.status;
+  elements.chartDecisionCard.classList.toggle("buy", direction === "BUY");
+  elements.chartDecisionCard.classList.toggle("sell", direction === "SELL");
+  elements.chartDecisionCard.classList.toggle("waiting", direction !== "BUY" && direction !== "SELL");
+  elements.chartDecisionStage.textContent = entryProjection.statusLabel;
+  elements.chartDecisionMode.textContent = activeResult.name;
+  elements.chartDecisionDirection.textContent = direction;
+  elements.chartDecisionReason.textContent = entryProjection.reason;
+  elements.chartDecisionBadges.innerHTML = activeResult.badges.map(renderBadge).join("");
+  elements.chartDecisionFill.style.width = `${activeResult.score}%`;
+  elements.chartDecisionScore.textContent = `${activeResult.score} / 100`;
 }
 
 function buildChartAlertReason(activeResult, entryProjection) {
