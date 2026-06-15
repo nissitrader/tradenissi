@@ -71,6 +71,10 @@ const elements = {
   workspace: document.getElementById("workspace"),
   apiNotice: document.getElementById("apiNotice"),
   chartFrame: document.getElementById("chartFrame"),
+  chartSignalAlert: document.getElementById("chartSignalAlert"),
+  chartAlertStage: document.getElementById("chartAlertStage"),
+  chartAlertDirection: document.getElementById("chartAlertDirection"),
+  chartAlertReason: document.getElementById("chartAlertReason"),
   overlayControls: document.getElementById("overlayControls"),
   strategyOverlay: document.getElementById("strategyOverlay"),
   replayCanvas: document.getElementById("replayCanvas"),
@@ -593,6 +597,7 @@ function evaluateReplayAndRender() {
   elements.tradeDirection.textContent = activeResult.status;
   elements.tradeDirection.style.color = getStatusColor(activeResult.status);
   elements.signalReason.textContent = entryProjection.reason;
+  renderChartSignalAlert(activeResult, entryProjection);
   elements.badgeRow.innerHTML = activeResult.badges.map(renderBadge).join("");
   elements.scoreFill.style.width = `${activeResult.score}%`;
   elements.scoreValue.textContent = `${activeResult.score} / 100`;
@@ -1393,6 +1398,7 @@ function evaluateAndRender() {
   elements.tradeDirection.textContent = activeResult.status;
   elements.tradeDirection.style.color = getStatusColor(activeResult.status);
   elements.signalReason.textContent = entryProjection.reason;
+  renderChartSignalAlert(activeResult, entryProjection);
   elements.badgeRow.innerHTML = activeResult.badges.map(renderBadge).join("");
   elements.scoreFill.style.width = `${activeResult.score}%`;
   elements.scoreValue.textContent = `${activeResult.score} / 100`;
@@ -1877,6 +1883,24 @@ function renderCandleScanner(candleScan) {
   elements.wickStrength.textContent = `${candleScan.wickStrength}%`;
   elements.bodyStrength.textContent = `${candleScan.bodyStrength}%`;
   elements.volumeStrength.textContent = `${candleScan.volumeStrength >= 0 ? "+" : ""}${candleScan.volumeStrength}% vs moyenne 20 bougies`;
+}
+
+function renderChartSignalAlert(activeResult, entryProjection) {
+  const direction = activeResult.status;
+  elements.chartSignalAlert.classList.toggle("buy", direction === "BUY");
+  elements.chartSignalAlert.classList.toggle("sell", direction === "SELL");
+  elements.chartSignalAlert.classList.toggle("waiting", direction !== "BUY" && direction !== "SELL");
+  elements.chartAlertStage.textContent = entryProjection.statusLabel;
+  elements.chartAlertDirection.textContent = direction;
+  elements.chartAlertReason.textContent = buildChartAlertReason(activeResult, entryProjection);
+}
+
+function buildChartAlertReason(activeResult, entryProjection) {
+  const setup = entryProjection.setup;
+  if (activeResult.status === "BUY" || activeResult.status === "SELL") {
+    return `Entrée ${setup.entry} · SL ${setup.sl} · TP1 ${setup.tp1} · ${entryProjection.metrics.status}`;
+  }
+  return entryProjection.reason;
 }
 
 function renderComparison(smartResult, goldResult) {

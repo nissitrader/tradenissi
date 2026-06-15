@@ -476,6 +476,60 @@ button:active {
   background: #090a08;
 }
 
+.chart-signal-alert {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 6;
+  display: grid;
+  gap: 3px;
+  width: min(360px, calc(100% - 28px));
+  padding: 10px 12px;
+  border: 1px solid rgba(231, 184, 78, 0.52);
+  border-radius: 8px;
+  background: rgba(9, 10, 8, 0.88);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
+  pointer-events: none;
+  backdrop-filter: blur(10px);
+}
+
+.chart-signal-alert span {
+  color: var(--gold);
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.chart-signal-alert strong {
+  color: var(--gold);
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.chart-signal-alert small {
+  color: #ded7c7;
+  font-size: 0.78rem;
+  line-height: 1.28;
+}
+
+.chart-signal-alert.buy {
+  border-color: rgba(70, 209, 123, 0.72);
+  background: linear-gradient(135deg, rgba(9, 10, 8, 0.9), rgba(70, 209, 123, 0.14));
+}
+
+.chart-signal-alert.buy strong {
+  color: var(--green);
+}
+
+.chart-signal-alert.sell {
+  border-color: rgba(239, 98, 98, 0.72);
+  background: linear-gradient(135deg, rgba(9, 10, 8, 0.9), rgba(239, 98, 98, 0.14));
+}
+
+.chart-signal-alert.sell strong {
+  color: var(--red);
+}
+
 .rsi-panel {
   min-height: 142px;
   border-top: 1px solid var(--line);
@@ -733,6 +787,9 @@ button:active {
 }
 
 .signal-card {
+  position: sticky;
+  top: 10px;
+  z-index: 5;
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
