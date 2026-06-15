@@ -157,6 +157,17 @@ function renderTradingView() {
     calendar: false,
     support_host: "https://www.tradingview.com",
     container_id: "tradingview_chart",
+    overrides: {
+      "mainSeriesProperties.candleStyle.upColor": "#2ee58a",
+      "mainSeriesProperties.candleStyle.downColor": "#ff5b5b",
+      "mainSeriesProperties.candleStyle.borderUpColor": "#b7ffd6",
+      "mainSeriesProperties.candleStyle.borderDownColor": "#ffc1c1",
+      "mainSeriesProperties.candleStyle.wickUpColor": "#2ee58a",
+      "mainSeriesProperties.candleStyle.wickDownColor": "#ff5b5b",
+      "paneProperties.background": "#090a08",
+      "paneProperties.vertGridProperties.color": "rgba(238, 232, 207, 0.08)",
+      "paneProperties.horzGridProperties.color": "rgba(238, 232, 207, 0.08)",
+    },
   };
 
   if (studies.length > 0) {
@@ -751,8 +762,17 @@ function drawReplayChart(candles, context, activeResult, entryProjection) {
     ctx.lineTo(x, lowY);
     ctx.stroke();
     const bodyTop = Math.min(openY, closeY);
-    const bodyHeight = Math.max(2, Math.abs(openY - closeY));
+    const rawBodyHeight = Math.abs(openY - closeY);
+    const bodyHeight = Math.max(3, rawBodyHeight);
     ctx.fillRect(x - candleWidth * 0.28, bodyTop, candleWidth * 0.56, bodyHeight);
+    if (rawBodyHeight < 2.4) {
+      ctx.strokeStyle = bullish ? "#b7ffd6" : "#ffc1c1";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(x - candleWidth * 0.34, closeY);
+      ctx.lineTo(x + candleWidth * 0.34, closeY);
+      ctx.stroke();
+    }
   });
 
   drawReplayOverlays(ctx, rect, context, activeResult, priceToY, entryProjection);
