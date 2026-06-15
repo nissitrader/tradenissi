@@ -32,12 +32,15 @@ const classicIndicators = [
 
 const API_UNAVAILABLE_MESSAGE = "API locale indisponible — vérifiez que votre PC, npm start et Cloudflare Tunnel sont actifs.";
 const DRAG_STORAGE_KEY = "tsr-draggable-signal-card-positions";
+const RISK_REWARD_STORAGE_KEY = "tsr-risk-reward-minimum";
+const RISK_REWARD_DEFAULT_MINIMUM = 1;
 
 const state = {
   interval: "240",
   intervalLabel: "H4",
   analysisMode: "smart",
   showBothAnalyses: false,
+  riskRewardMinimum: RISK_REWARD_DEFAULT_MINIMUM,
   smartMoneyVisibility: Object.fromEntries(smartMoneyOverlays.map((item) => [item.id, item.defaultOn])),
   classicVisibility: Object.fromEntries(classicIndicators.map((item) => [item.id, item.defaultOn])),
   tick: 0,
@@ -85,6 +88,7 @@ const elements = {
   chartDecisionFill: document.getElementById("chartDecisionFill"),
   chartDecisionScore: document.getElementById("chartDecisionScore"),
   resetSignalPositions: document.getElementById("resetSignalPositions"),
+  riskRewardMinimum: document.getElementById("riskRewardMinimum"),
   overlayControls: document.getElementById("overlayControls"),
   strategyOverlay: document.getElementById("strategyOverlay"),
   replayCanvas: document.getElementById("replayCanvas"),
@@ -116,6 +120,7 @@ const elements = {
   tp1: document.getElementById("tp1"),
   tp2: document.getElementById("tp2"),
   tp3: document.getElementById("tp3"),
+  riskRewardValue: document.getElementById("riskRewardValue"),
   confirmTf: document.getElementById("confirmTf"),
   blockChecks: document.getElementById("blockChecks"),
   usedZone: document.getElementById("usedZone"),
@@ -125,6 +130,9 @@ const elements = {
   h1Direction: document.getElementById("h1Direction"),
   m15Direction: document.getElementById("m15Direction"),
   confirmationSummary: document.getElementById("confirmationSummary"),
+  riskAmount: document.getElementById("riskAmount"),
+  gainPotential: document.getElementById("gainPotential"),
+  rrClassification: document.getElementById("rrClassification"),
   candleQuality: document.getElementById("candleQuality"),
   candleType: document.getElementById("candleType"),
   candleRejection: document.getElementById("candleRejection"),
@@ -137,6 +145,7 @@ const elements = {
 
 function boot() {
   initReplayDefaults();
+  initRiskRewardMinimum();
   renderOverlayControls();
   bindInteractions();
   initDraggableSignalCards();
@@ -315,6 +324,29 @@ function bindInteractions() {
     setTimeout(renderTradingView, 120);
   });
   elements.resetSignalPositions.addEventListener("click", resetDraggableSignalCards);
+  elements.riskRewardMinimum.addEventListener("change", () => {
+    state.riskRewardMinimum = Number(elements.riskRewardMinimum.value) || RISK_REWARD_DEFAULT_MINIMUM;
+    writeRiskRewardMinimum();
+    evaluateAndRender();
+  });
+}
+
+function initRiskRewardMinimum() {
+  try {
+    const saved = Number(localStorage.getItem(RISK_REWARD_STORAGE_KEY));
+    if ([1, 1.5, 2, 3].includes(saved)) state.riskRewardMinimum = saved;
+  } catch {
+    state.riskRewardMinimum = RISK_REWARD_DEFAULT_MINIMUM;
+  }
+  elements.riskRewardMinimum.value = String(state.riskRewardMinimum);
+}
+
+function writeRiskRewardMinimum() {
+  try {
+    localStorage.setItem(RISK_REWARD_STORAGE_KEY, String(state.riskRewardMinimum));
+  } catch {
+    // The selected RR still applies in the current session if storage is blocked.
+  }
 }
 
 function initDraggableSignalCards() {
@@ -732,6 +764,7 @@ function evaluateReplayAndRender() {
   elements.tp1.textContent = activeResult.setup.tp1;
   elements.tp2.textContent = activeResult.setup.tp2;
   elements.tp3.textContent = activeResult.setup.tp3;
+  renderRiskRewardDetails(activeResult.riskReward);
   elements.confirmTf.textContent = activeResult.timeframe;
   elements.usedZone.textContent = activeResult.zone;
   elements.targetLiquidity.textContent = activeResult.liquidity;
@@ -1075,7 +1108,10 @@ function updateReplayJournal(activeResult, context, visibleCandles, entryProject
     candleQuality: context.candleScan.quality,
     candleSummary: context.candleScan.summary,
     positionStatus: entryProjection.metrics.status,
-    riskReward: `${entryProjection.metrics.rr1}/${entryProjection.metrics.rr2}/${entryProjection.metrics.rr3}`,
+    risk: activeResult.riskReward.riskPoints,
+    gainPotential: activeResult.riskReward.gainPotentialPoints,
+    riskReward: activeResult.riskReward.display,
+    riskRewardClassification: activeResult.riskReward.classification,
   });
   postApiLog({
     type: "replay-signal",
@@ -1089,7 +1125,10 @@ function updateReplayJournal(activeResult, context, visibleCandles, entryProject
     candleQuality: context.candleScan.quality,
     candleSummary: context.candleScan.summary,
     positionStatus: entryProjection.metrics.status,
-    riskReward: `${entryProjection.metrics.rr1}/${entryProjection.metrics.rr2}/${entryProjection.metrics.rr3}`,
+    risk: activeResult.riskReward.riskPoints,
+    gainPotential: activeResult.riskReward.gainPotentialPoints,
+    riskReward: activeResult.riskReward.display,
+    riskRewardClassification: activeResult.riskReward.classification,
   });
   renderReplayJournal();
 }
@@ -1143,7 +1182,8 @@ function renderReplayJournal() {
           <span>${entry.mode} · Entrée ${entry.entry} · SL ${entry.sl} · TP ${entry.tp}</span>
           <span>Résultat: ${entry.result}</span>
           <span>Candle Quality: ${entry.candleQuality}/100</span>
-          <span>Position: ${entry.positionStatus} · RR ${entry.riskReward}</span>
+          <span>Risque: ${entry.risk} · Gain potentiel: ${entry.gainPotential} · RR ${entry.riskReward} (${entry.riskRewardClassification})</span>
+          <span>Position: ${entry.positionStatus}</span>
           <small>${entry.candleSummary}</small>
           <small>${entry.reason}</small>
         </article>
@@ -1538,6 +1578,7 @@ function evaluateAndRender() {
   elements.tp1.textContent = activeResult.setup.tp1;
   elements.tp2.textContent = activeResult.setup.tp2;
   elements.tp3.textContent = activeResult.setup.tp3;
+  renderRiskRewardDetails(activeResult.riskReward);
   elements.confirmTf.textContent = activeResult.timeframe;
   elements.usedZone.textContent = activeResult.zone;
   elements.targetLiquidity.textContent = activeResult.liquidity;
@@ -1655,38 +1696,46 @@ function scoreSetup(market, news, zones, confirmation, candleScan) {
 
 function buildSmartMoneyAnalysis(session, market, news, zones, confirmation, candleScan) {
   const score = scoreSetup(market, news, zones, confirmation, candleScan);
-  const valid = market.valid && news.valid && zones.valid && confirmation.valid && candleScan.valid;
-  const direction = valid ? market.bias : "WAIT";
+  const coreValid = market.valid && news.valid && zones.valid && confirmation.valid && candleScan.valid;
+  const direction = coreValid ? market.bias : "WAIT";
   const setup = buildSetup(direction, zones, confirmation);
-  const missingReason = getMissingReason(market, news, zones, confirmation, candleScan);
+  const riskReward = setup.riskReward;
+  const rrBlocked = coreValid && !riskReward.valid;
+  const valid = coreValid && riskReward.valid;
+  const missingReason = rrBlocked ? "Configuration valide mais RR insuffisant." : getMissingReason(market, news, zones, confirmation, candleScan);
   const scoreLabel = score >= 85 ? "setup fort" : score >= 70 ? "signal possible" : score >= 50 ? "attente" : "pas de trade";
+  const status = valid ? direction : rrBlocked ? "SIGNAL REFUSÉ" : "ATTENTE";
 
   return {
     id: "smart",
     name: "TSR Smart Money",
     valid,
     direction,
-    status: valid ? direction : "ATTENTE",
-    setupState: valid ? "Setup complet" : "Setup incomplet",
+    status,
+    setupState: valid ? "Setup complet" : rrBlocked ? "Signal refusé" : "Setup incomplet",
     score,
     scoreLabel,
     biasLabel: market.action,
     setup,
+    riskReward,
     timeframe: confirmation.timeframe,
     zone: zones.primary,
     liquidity: zones.targetLiquidity,
-    blockingReason: valid ? "Aucun" : missingReason,
+    blockingReason: valid ? "Aucun" : rrBlocked ? `Signal refusé : RR insuffisant (${riskReward.display}, minimum ${formatRiskRewardValue(state.riskRewardMinimum)})` : missingReason,
     confirmationSummary: confirmation.reason,
     reason: valid
-      ? `${direction} validé: ${market.context}, ${zones.primary}, ${confirmation.reason}`
-      : `Setup incomplet — ${missingReason}`,
-    badges: buildSmartBadges(market, news, valid, candleScan),
+      ? `${direction} confirmé: Entrée ${setup.entry}, SL ${setup.sl}, TP1 ${setup.tp1}, RR ${riskReward.display}. ${market.context}, ${zones.primary}, ${confirmation.reason}`
+      : rrBlocked
+        ? `Configuration valide mais RR insuffisant. Signal refusé : RR insuffisant (RR ${riskReward.display}, minimum ${formatRiskRewardValue(state.riskRewardMinimum)}).`
+        : `Setup incomplet — ${missingReason}`,
+    badges: buildSmartBadges(market, news, valid, candleScan, riskReward, rrBlocked),
     blocks: [
       ["Météo du marché", market.valid, market.context],
       ["Structure de marché", market.valid, market.bias === "BUY" ? "HH/HL + BOS haussier" : market.bias === "SELL" ? "LH/LL + BOS baissier" : "Structure neutre"],
       ["Liquidité", zones.valid, zones.reason],
       ["Order Blocks", zones.valid, zones.primary],
       ["Confirmation d'entrée", confirmation.valid, confirmation.reason],
+      ["Risk/Reward minimum", !coreValid || riskReward.valid, coreValid ? `${riskReward.display} · ${riskReward.classification} · minimum ${formatRiskRewardValue(state.riskRewardMinimum)}` : "Calculé après validation structure"],
       ["Candle Scanner", candleScan.valid, `${candleScan.quality}/100 · ${candleScan.summary}`],
       ["News économiques", news.valid, news.reason],
     ],
@@ -1715,9 +1764,10 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
     ["CRT", crtAvailable && crt, crtAvailable ? "CRT validé" : "CRT en attente"],
   ];
   const advancedCount = advancedConfirmations.filter((item) => item[1]).length;
+  const rrRefused = smartResult.status === "SIGNAL REFUSÉ";
   const mandatoryValid = smartResult.valid && h1Aligned && h1OrderBlock && m15Refinement;
   const valid = mandatoryValid && advancedCount >= 2;
-  const refused = smartResult.valid && smartResult.direction !== "WAIT" && !h1Aligned;
+  const refused = rrRefused || (smartResult.valid && smartResult.direction !== "WAIT" && !h1Aligned);
   const status = valid ? smartResult.direction : refused ? "SIGNAL REFUSÉ" : "ATTENTE";
   const score = scoreGoldSetup(smartResult.score, h1Aligned, h1OrderBlock, m15Refinement, advancedCount, candleScan.quality);
   const missingAdvanced = advancedConfirmations.filter((item) => !item[1]).map((item) => item[0]);
@@ -1744,8 +1794,9 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
     setupState: valid ? "Setup premium" : refused ? "Signal refusé" : "Setup incomplet",
     score,
     scoreLabel: score >= 90 ? "setup premium" : score >= 75 ? "setup avancé possible" : score >= 60 ? "attente" : "pas de trade",
-    biasLabel: refused ? "Tendance contraire" : valid ? "Confluence forte" : "Attente avancée",
-    setup: valid ? smartResult.setup : buildSetup("WAIT", zones, confirmation),
+    biasLabel: rrRefused ? "RR insuffisant" : refused ? "Tendance contraire" : valid ? "Confluence forte" : "Attente avancée",
+    setup: valid || rrRefused ? smartResult.setup : buildSetup("WAIT", zones, confirmation),
+    riskReward: valid || rrRefused ? smartResult.riskReward : buildSetup("WAIT", zones, confirmation).riskReward,
     timeframe: valid ? smartResult.timeframe : "H1 + M15",
     zone: h1OrderBlock ? `Order Block H1 ${smartResult.direction === "SELL" ? "bearish" : "bullish"}` : "Order Block H1 absent",
     liquidity: smartResult.liquidity,
@@ -1754,9 +1805,10 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
     blockingReason: valid ? "Aucun" : reason,
     confirmationSummary: confirmedAdvanced.length ? confirmedAdvanced.join(", ") : "Aucune confirmation avancée",
     reason,
-    badges: buildGoldBadges(valid, refused, news, market, h1Aligned, advancedCount, candleScan),
+    badges: buildGoldBadges(valid, refused, news, market, h1Aligned, advancedCount, candleScan, smartResult.riskReward, rrRefused),
     blocks: [
       ["Mode 1 valide", smartResult.valid, smartResult.valid ? `${smartResult.status} Mode 1 confirmé` : smartResult.blockingReason],
+      ["Risk/Reward minimum", !rrRefused && (!smartResult.riskReward || smartResult.riskReward.valid), smartResult.riskReward ? `${smartResult.riskReward.display} · ${smartResult.riskReward.classification} · minimum ${formatRiskRewardValue(state.riskRewardMinimum)}` : "En attente"],
       ["Direction H1 obligatoire", h1Aligned, h1Aligned ? h1Direction.label : `Tendance H1: ${h1Direction.label}`],
       ["Order Block H1 obligatoire", h1OrderBlock, h1OrderBlock ? "OB H1 valide" : "OB H1 non validé"],
       ["Raffinement M15 obligatoire", m15Refinement, m15Refinement ? m15Direction.label : "pas de raffinement M15"],
@@ -1778,6 +1830,7 @@ function scoreGoldSetup(smartScore, h1Aligned, h1OrderBlock, m15Refinement, adva
 }
 
 function getGoldReason({ smartResult, valid, refused, h1Direction, h1Aligned, h1OrderBlock, m15Refinement, advancedCount, confirmedAdvanced, missingAdvanced }) {
+  if (smartResult.status === "SIGNAL REFUSÉ") return smartResult.blockingReason;
   if (!smartResult.valid) return `Mode 1 non valide: ${smartResult.blockingReason}`;
   if (refused || !h1Aligned) return `Signal refusé: ${smartResult.status} contre tendance H1 ${h1Direction.label}`;
   if (!h1OrderBlock) return `Mode 1 ${smartResult.status} valide, mais Mode 2 en attente: Order Block H1 obligatoire absent`;
@@ -1837,30 +1890,32 @@ function oppositeDirection(direction) {
   return direction === "BUY" ? "SELL" : direction === "SELL" ? "BUY" : "WAIT";
 }
 
-function buildSmartBadges(market, news, valid, candleScan) {
+function buildSmartBadges(market, news, valid, candleScan, riskReward, rrBlocked) {
   const badges = [];
-  badges.push(valid ? ["Validé", "valid"] : ["En attente", "pending"]);
+  badges.push(valid ? ["Validé", "valid"] : rrBlocked ? ["RR insuffisant", "refused"] : ["En attente", "pending"]);
   if (!news.valid) badges.push(["Risque news", "risk"]);
   if (market.context.includes("range")) badges.push(["Range dangereux", "risk"]);
   if (market.valid) badges.push(["Tendance alignée", "valid"]);
+  if (riskReward?.display && riskReward.display !== "--") badges.push([`RR ${riskReward.display}`, riskReward.valid ? "valid" : "risk"]);
   badges.push(candleScan.valid ? [`Candle ${candleScan.quality}`, "valid"] : ["Bougie faible", "risk"]);
   return badges;
 }
 
-function buildGoldBadges(valid, refused, news, market, h1Aligned, advancedCount, candleScan) {
+function buildGoldBadges(valid, refused, news, market, h1Aligned, advancedCount, candleScan, riskReward, rrBlocked) {
   const badges = [];
   badges.push(valid ? ["Validé", "valid"] : refused ? ["Refusé", "refused"] : ["En attente", "pending"]);
   if (!news.valid) badges.push(["Risque news", "risk"]);
   if (market.context.includes("range")) badges.push(["Range dangereux", "risk"]);
   badges.push(h1Aligned ? ["Tendance alignée", "valid"] : ["Tendance contraire", "refused"]);
   if (advancedCount >= 2) badges.push(["Confluence forte", "valid"]);
+  if (riskReward?.display && riskReward.display !== "--") badges.push([rrBlocked ? "RR insuffisant" : `RR ${riskReward.display}`, riskReward.valid ? "valid" : "risk"]);
   badges.push(candleScan.quality >= 81 ? ["Bougie premium", "valid"] : candleScan.valid ? ["Bougie forte", "valid"] : ["Bougie faible", "risk"]);
   return badges;
 }
 
 function buildSetup(direction, zones, confirmation) {
   if (direction === "WAIT") {
-    return { entry: "--", sl: "--", tp1: "--", tp2: "--", tp3: "--" };
+    return attachRiskReward({ entry: "--", sl: "--", tp1: "--", tp2: "--", tp3: "--", zone: zones.primary }, direction);
   }
 
   const drift = Math.sin(state.tick / 3) * 4.2;
@@ -1868,14 +1923,68 @@ function buildSetup(direction, zones, confirmation) {
   const risk = confirmation.timeframe === "M1" || confirmation.timeframe === "30s" ? 2.9 : 5.4;
   const sign = direction === "BUY" ? 1 : -1;
 
-  return {
+  return attachRiskReward({
     entry: formatPrice(entry),
     sl: formatPrice(entry - sign * risk),
     tp1: formatPrice(entry + sign * risk * 1.35),
     tp2: formatPrice(entry + sign * risk * 2.15),
     tp3: formatPrice(entry + sign * risk * 3.2),
     zone: zones.primary,
+  }, direction);
+}
+
+function attachRiskReward(setup, direction) {
+  return {
+    ...setup,
+    riskReward: calculateRiskReward(direction, setup),
   };
+}
+
+function calculateRiskReward(direction, setup) {
+  const entry = parsePrice(setup.entry);
+  const sl = parsePrice(setup.sl);
+  const tp2 = parsePrice(setup.tp2);
+  const minimum = Math.max(1, Number(state.riskRewardMinimum) || RISK_REWARD_DEFAULT_MINIMUM);
+  if (direction !== "BUY" && direction !== "SELL" || ![entry, sl, tp2].every(Number.isFinite)) {
+    return {
+      valid: false,
+      rr: 0,
+      display: "--",
+      classification: "En attente",
+      riskPoints: "--",
+      gainPotentialPoints: "--",
+      minimum,
+      reason: "RR calculé après validation des niveaux",
+    };
+  }
+
+  const risk = Math.abs(entry - sl);
+  const gainPotential = Math.abs(tp2 - entry);
+  const rr = risk > 0 ? gainPotential / risk : 0;
+  const valid = rr >= minimum && rr >= 1;
+  return {
+    valid,
+    rr,
+    display: formatRiskRewardValue(rr),
+    classification: classifyRiskReward(rr),
+    riskPoints: formatPoints(risk),
+    gainPotentialPoints: formatPoints(gainPotential),
+    minimum,
+    reason: valid ? `RR ${formatRiskRewardValue(rr)} accepté` : "Signal refusé : RR insuffisant",
+  };
+}
+
+function classifyRiskReward(rr) {
+  if (rr < 1) return "Refusé";
+  if (rr < 1.5) return "Faible";
+  if (rr < 2) return "Acceptable";
+  if (rr <= 3) return "Bon";
+  return "Premium";
+}
+
+function formatRiskRewardValue(value) {
+  if (!Number.isFinite(value)) return "--";
+  return value.toFixed(2).replace(/\.?0+$/, "");
 }
 
 function getMissingReason(market, news, zones, confirmation, candleScan) {
@@ -1889,10 +1998,11 @@ function getMissingReason(market, news, zones, confirmation, candleScan) {
 
 function buildEntryProjection(activeResult, market, zones, confirmation, candleScan, candles = []) {
   const confirmed = activeResult.status === "BUY" || activeResult.status === "SELL";
-  const direction = confirmed ? activeResult.status : inferProjectionDirection(activeResult, market, zones);
+  const refused = activeResult.status === "SIGNAL REFUSÉ";
+  const direction = confirmed || refused ? activeResult.direction : inferProjectionDirection(activeResult, market, zones);
   const hasDirection = direction === "BUY" || direction === "SELL";
-  const stage = getEntryProjectionStage(confirmed, market, zones, confirmation, candleScan);
-  const setup = confirmed ? activeResult.setup : hasDirection ? buildSetup(direction, zones, confirmation) : buildSetup("WAIT", zones, confirmation);
+  const stage = refused ? "refused" : getEntryProjectionStage(confirmed, market, zones, confirmation, candleScan);
+  const setup = confirmed || refused ? activeResult.setup : hasDirection ? buildSetup(direction, zones, confirmation) : buildSetup("WAIT", zones, confirmation);
   const metrics = buildPositionMetrics(direction, setup, stage, candles);
 
   return {
@@ -1901,7 +2011,7 @@ function buildEntryProjection(activeResult, market, zones, confirmation, candleS
     setup,
     metrics,
     statusLabel: getProjectionStatusLabel(stage, direction),
-    reason: getProjectionReason(stage, direction, zones, confirmation, candleScan, activeResult),
+    reason: refused ? activeResult.reason : getProjectionReason(stage, direction, zones, confirmation, candleScan, activeResult),
   };
 }
 
@@ -1920,6 +2030,7 @@ function getEntryProjectionStage(confirmed, market, zones, confirmation, candleS
 }
 
 function getProjectionStatusLabel(stage, direction) {
+  if (stage === "refused") return "Signal refusé";
   if (stage === "confirmed") return `${direction} confirmé`;
   if (stage === "imminent") return "Entrée imminente — prépare-toi";
   if (stage === "potential") return "Entrée potentielle — attendre réaction";
@@ -1939,10 +2050,11 @@ function buildPositionMetrics(direction, setup, stage, candles = []) {
   const tp1 = parsePrice(setup.tp1);
   const tp2 = parsePrice(setup.tp2);
   const tp3 = parsePrice(setup.tp3);
-  if (direction !== "BUY" && direction !== "SELL") return { valid: false, status: "en attente", rr1: "--", rr2: "--", rr3: "--", riskPoints: "--", tp1Points: "--", tp2Points: "--", tp3Points: "--" };
-  if (![entry, sl, tp1, tp2, tp3].every(Number.isFinite)) return { valid: false, status: "en attente", rr1: "--", rr2: "--", rr3: "--", riskPoints: "--", tp1Points: "--", tp2Points: "--", tp3Points: "--" };
+  if (direction !== "BUY" && direction !== "SELL") return { valid: false, status: "en attente", rr: "--", rr1: "--", rr2: "--", rr3: "--", riskPoints: "--", gainPotentialPoints: "--", tp1Points: "--", tp2Points: "--", tp3Points: "--" };
+  if (![entry, sl, tp1, tp2, tp3].every(Number.isFinite)) return { valid: false, status: "en attente", rr: "--", rr1: "--", rr2: "--", rr3: "--", riskPoints: "--", gainPotentialPoints: "--", tp1Points: "--", tp2Points: "--", tp3Points: "--" };
 
   const risk = Math.abs(entry - sl);
+  if (risk <= 0) return { valid: false, status: "en attente", rr: "--", rr1: "--", rr2: "--", rr3: "--", riskPoints: "--", gainPotentialPoints: "--", tp1Points: "--", tp2Points: "--", tp3Points: "--" };
   const tp1Distance = Math.abs(tp1 - entry);
   const tp2Distance = Math.abs(tp2 - entry);
   const tp3Distance = Math.abs(tp3 - entry);
@@ -1951,10 +2063,12 @@ function buildPositionMetrics(direction, setup, stage, candles = []) {
   return {
     valid: true,
     status,
+    rr: formatRiskRewardValue(tp2Distance / risk),
     rr1: formatRatio(tp1Distance / risk),
     rr2: formatRatio(tp2Distance / risk),
     rr3: formatRatio(tp3Distance / risk),
     riskPoints: formatPoints(risk),
+    gainPotentialPoints: formatPoints(tp2Distance),
     tp1Points: formatPoints(tp1Distance),
     tp2Points: formatPoints(tp2Distance),
     tp3Points: formatPoints(tp3Distance),
@@ -2016,11 +2130,22 @@ function renderCandleScanner(candleScan) {
   elements.volumeStrength.textContent = `${candleScan.volumeStrength >= 0 ? "+" : ""}${candleScan.volumeStrength}% vs moyenne 20 bougies`;
 }
 
+function renderRiskRewardDetails(riskReward) {
+  const rr = riskReward || calculateRiskReward("WAIT", { entry: "--", sl: "--", tp2: "--" });
+  elements.riskRewardValue.textContent = rr.display === "--" ? "--" : `${rr.display} (${rr.classification})`;
+  elements.riskAmount.textContent = rr.riskPoints;
+  elements.gainPotential.textContent = rr.gainPotentialPoints;
+  elements.rrClassification.textContent = rr.display === "--"
+    ? `Minimum ${formatRiskRewardValue(state.riskRewardMinimum)}`
+    : `${rr.classification} · minimum ${formatRiskRewardValue(state.riskRewardMinimum)} · ${rr.valid ? "accepté" : "refusé"}`;
+}
+
 function renderChartSignalAlert(activeResult, entryProjection) {
   const direction = activeResult.status;
   elements.chartSignalAlert.classList.toggle("buy", direction === "BUY");
   elements.chartSignalAlert.classList.toggle("sell", direction === "SELL");
-  elements.chartSignalAlert.classList.toggle("waiting", direction !== "BUY" && direction !== "SELL");
+  elements.chartSignalAlert.classList.toggle("refused", direction === "SIGNAL REFUSÉ");
+  elements.chartSignalAlert.classList.toggle("waiting", direction !== "BUY" && direction !== "SELL" && direction !== "SIGNAL REFUSÉ");
   elements.chartAlertStage.textContent = entryProjection.statusLabel;
   elements.chartAlertDirection.textContent = direction;
   elements.chartAlertReason.textContent = buildChartAlertReason(activeResult, entryProjection);
@@ -2031,7 +2156,8 @@ function renderChartDecisionCard(activeResult, entryProjection) {
   const direction = activeResult.status;
   elements.chartDecisionCard.classList.toggle("buy", direction === "BUY");
   elements.chartDecisionCard.classList.toggle("sell", direction === "SELL");
-  elements.chartDecisionCard.classList.toggle("waiting", direction !== "BUY" && direction !== "SELL");
+  elements.chartDecisionCard.classList.toggle("refused", direction === "SIGNAL REFUSÉ");
+  elements.chartDecisionCard.classList.toggle("waiting", direction !== "BUY" && direction !== "SELL" && direction !== "SIGNAL REFUSÉ");
   elements.chartDecisionStage.textContent = entryProjection.statusLabel;
   elements.chartDecisionMode.textContent = activeResult.name;
   elements.chartDecisionDirection.textContent = direction;
@@ -2044,7 +2170,10 @@ function renderChartDecisionCard(activeResult, entryProjection) {
 function buildChartAlertReason(activeResult, entryProjection) {
   const setup = entryProjection.setup;
   if (activeResult.status === "BUY" || activeResult.status === "SELL") {
-    return `Entrée ${setup.entry} · SL ${setup.sl} · TP1 ${setup.tp1} · ${entryProjection.metrics.status}`;
+    return `Entrée ${setup.entry} · SL ${setup.sl} · TP1 ${setup.tp1} · RR ${activeResult.riskReward?.display || entryProjection.metrics.rr} · ${entryProjection.metrics.status}`;
+  }
+  if (activeResult.status === "SIGNAL REFUSÉ" && activeResult.riskReward?.display) {
+    return `Signal refusé : RR insuffisant · RR ${activeResult.riskReward.display} · minimum ${formatRiskRewardValue(state.riskRewardMinimum)}`;
   }
   return entryProjection.reason;
 }

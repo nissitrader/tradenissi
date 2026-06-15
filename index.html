@@ -136,6 +136,18 @@
             <input id="chartScale" type="range" min="48" max="76" value="61" />
           </label>
 
+          <section class="risk-reward-control" aria-label="Filtre Risk Reward">
+            <label>
+              <span>RR Minimum</span>
+              <select id="riskRewardMinimum">
+                <option value="1">1.0</option>
+                <option value="1.5">1.5</option>
+                <option value="2">2.0</option>
+                <option value="3">3.0</option>
+              </select>
+            </label>
+          </section>
+
           <div class="checkbox-list" id="overlayControls"></div>
         </aside>
 
@@ -243,6 +255,10 @@
               <strong id="tp3">--</strong>
             </article>
             <article>
+              <span>RR</span>
+              <strong id="riskRewardValue">--</strong>
+            </article>
+            <article>
               <span>Confirmation</span>
               <strong id="confirmTf">--</strong>
             </article>
@@ -283,6 +299,18 @@
               <div>
                 <dt>Confirmations</dt>
                 <dd id="confirmationSummary">--</dd>
+              </div>
+              <div>
+                <dt>Risque</dt>
+                <dd id="riskAmount">--</dd>
+              </div>
+              <div>
+                <dt>Gain potentiel</dt>
+                <dd id="gainPotential">--</dd>
+              </div>
+              <div>
+                <dt>Classification RR</dt>
+                <dd id="rrClassification">--</dd>
               </div>
               <div>
                 <dt>Candle Quality</dt>

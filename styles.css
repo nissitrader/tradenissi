@@ -374,6 +374,38 @@ button:active {
   accent-color: var(--gold);
 }
 
+.risk-reward-control {
+  display: grid;
+  gap: 8px;
+  margin: 13px;
+  padding: 11px;
+  border: 1px solid rgba(231, 184, 78, 0.38);
+  border-radius: 8px;
+  background: rgba(231, 184, 78, 0.055);
+}
+
+.risk-reward-control label {
+  display: grid;
+  gap: 7px;
+}
+
+.risk-reward-control span {
+  color: var(--gold);
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.risk-reward-control select {
+  min-height: 34px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #1b1e19;
+  color: var(--text);
+  padding: 0 8px;
+}
+
 .checkbox-list {
   display: grid;
   gap: 14px;
@@ -561,6 +593,15 @@ button:active {
   color: var(--red);
 }
 
+.chart-signal-alert.refused {
+  border-color: rgba(239, 98, 98, 0.82);
+  background: linear-gradient(135deg, rgba(9, 10, 8, 0.94), rgba(239, 98, 98, 0.18));
+}
+
+.chart-signal-alert.refused strong {
+  color: var(--red);
+}
+
 .chart-signal-alert.waiting {
   border-color: rgba(231, 184, 78, 0.72);
   background: linear-gradient(135deg, rgba(9, 10, 8, 0.94), rgba(231, 184, 78, 0.12));
@@ -632,6 +673,16 @@ button:active {
 
 .chart-decision-card.sell > strong {
   color: var(--red);
+}
+
+.chart-decision-card.refused {
+  border-color: rgba(239, 98, 98, 0.72);
+  background: linear-gradient(135deg, rgba(9, 10, 8, 0.93), rgba(239, 98, 98, 0.16));
+}
+
+.chart-decision-card.refused > strong {
+  color: var(--red);
+  font-size: 1.05rem;
 }
 
 .chart-decision-card.waiting {
