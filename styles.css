@@ -477,18 +477,18 @@ button:active {
 }
 
 .chart-signal-alert {
-  position: absolute;
-  right: 14px;
-  bottom: 14px;
-  z-index: 6;
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 1000;
   display: grid;
-  gap: 3px;
-  width: min(360px, calc(100% - 28px));
-  padding: 10px 12px;
-  border: 1px solid rgba(231, 184, 78, 0.52);
+  gap: 4px;
+  width: min(430px, calc(100vw - 36px));
+  padding: 12px 14px;
+  border: 2px solid rgba(231, 184, 78, 0.72);
   border-radius: 8px;
-  background: rgba(9, 10, 8, 0.88);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
+  background: rgba(9, 10, 8, 0.94);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.52);
   pointer-events: none;
   backdrop-filter: blur(10px);
 }
@@ -528,6 +528,11 @@ button:active {
 
 .chart-signal-alert.sell strong {
   color: var(--red);
+}
+
+.chart-signal-alert.waiting {
+  border-color: rgba(231, 184, 78, 0.72);
+  background: linear-gradient(135deg, rgba(9, 10, 8, 0.94), rgba(231, 184, 78, 0.12));
 }
 
 .rsi-panel {
@@ -1167,5 +1172,11 @@ button:active {
 
   .chart-frame {
     min-height: 520px;
+  }
+
+  .chart-signal-alert {
+    right: 10px;
+    bottom: 10px;
+    width: calc(100vw - 20px);
   }
 }
