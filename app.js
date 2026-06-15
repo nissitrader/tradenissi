@@ -35,7 +35,10 @@ const classicIndicators = [
 const API_UNAVAILABLE_MESSAGE = "API locale indisponible — vérifiez que votre PC, npm start et Cloudflare Tunnel sont actifs.";
 const DRAG_STORAGE_KEY = "tsr-draggable-signal-card-positions";
 const RISK_REWARD_STORAGE_KEY = "tsr-risk-reward-minimum";
-const RISK_REWARD_DEFAULT_MINIMUM = 1;
+const SCORE_FILTER_STORAGE_KEY = "tsr-score-filter-minimums";
+const RISK_REWARD_DEFAULT_MINIMUM = 1.2;
+const SMART_SCORE_DEFAULT_MINIMUM = 70;
+const GOLD_SCORE_DEFAULT_MINIMUM = 80;
 
 const state = {
   interval: "240",
@@ -43,7 +46,16 @@ const state = {
   analysisMode: "smart",
   showBothAnalyses: false,
   riskRewardMinimum: RISK_REWARD_DEFAULT_MINIMUM,
+  scoreMinimums: {
+    smart: SMART_SCORE_DEFAULT_MINIMUM,
+    gold: GOLD_SCORE_DEFAULT_MINIMUM,
+  },
   precisionChart: true,
+  signalFlow: {
+    activeDirection: null,
+    status: "en attente",
+    invalidatedTick: -999,
+  },
   smartMoneyVisibility: Object.fromEntries(smartMoneyOverlays.map((item) => [item.id, item.defaultOn])),
   classicVisibility: Object.fromEntries(classicIndicators.map((item) => [item.id, item.defaultOn])),
   tick: 0,
@@ -93,6 +105,8 @@ const elements = {
   resetSignalPositions: document.getElementById("resetSignalPositions"),
   togglePrecisionChart: document.getElementById("togglePrecisionChart"),
   riskRewardMinimum: document.getElementById("riskRewardMinimum"),
+  smartScoreMinimum: document.getElementById("smartScoreMinimum"),
+  goldScoreMinimum: document.getElementById("goldScoreMinimum"),
   overlayControls: document.getElementById("overlayControls"),
   strategyOverlay: document.getElementById("strategyOverlay"),
   replayCanvas: document.getElementById("replayCanvas"),
@@ -137,6 +151,7 @@ const elements = {
   riskAmount: document.getElementById("riskAmount"),
   gainPotential: document.getElementById("gainPotential"),
   rrClassification: document.getElementById("rrClassification"),
+  signalLifecycleStatus: document.getElementById("signalLifecycleStatus"),
   candleQuality: document.getElementById("candleQuality"),
   candleType: document.getElementById("candleType"),
   candleRejection: document.getElementById("candleRejection"),
@@ -150,6 +165,7 @@ const elements = {
 function boot() {
   initReplayDefaults();
   initRiskRewardMinimum();
+  initScoreMinimums();
   renderOverlayControls();
   bindInteractions();
   initDraggableSignalCards();
@@ -341,6 +357,16 @@ function bindInteractions() {
     writeRiskRewardMinimum();
     evaluateAndRender();
   });
+  elements.smartScoreMinimum.addEventListener("change", () => {
+    state.scoreMinimums.smart = Number(elements.smartScoreMinimum.value) || SMART_SCORE_DEFAULT_MINIMUM;
+    writeScoreMinimums();
+    evaluateAndRender();
+  });
+  elements.goldScoreMinimum.addEventListener("change", () => {
+    state.scoreMinimums.gold = Number(elements.goldScoreMinimum.value) || GOLD_SCORE_DEFAULT_MINIMUM;
+    writeScoreMinimums();
+    evaluateAndRender();
+  });
 }
 
 function syncPrecisionChartMode() {
@@ -353,7 +379,7 @@ function syncPrecisionChartMode() {
 function initRiskRewardMinimum() {
   try {
     const saved = Number(localStorage.getItem(RISK_REWARD_STORAGE_KEY));
-    if ([1, 1.5, 2, 3].includes(saved)) state.riskRewardMinimum = saved;
+    if ([1, 1.2, 1.5, 2].includes(saved)) state.riskRewardMinimum = saved;
   } catch {
     state.riskRewardMinimum = RISK_REWARD_DEFAULT_MINIMUM;
   }
@@ -365,6 +391,27 @@ function writeRiskRewardMinimum() {
     localStorage.setItem(RISK_REWARD_STORAGE_KEY, String(state.riskRewardMinimum));
   } catch {
     // The selected RR still applies in the current session if storage is blocked.
+  }
+}
+
+function initScoreMinimums() {
+  try {
+    const saved = safeJson(localStorage.getItem(SCORE_FILTER_STORAGE_KEY));
+    if ([60, 65, 70, 75].includes(Number(saved?.smart))) state.scoreMinimums.smart = Number(saved.smart);
+    if ([75, 80, 85, 90].includes(Number(saved?.gold))) state.scoreMinimums.gold = Number(saved.gold);
+  } catch {
+    state.scoreMinimums.smart = SMART_SCORE_DEFAULT_MINIMUM;
+    state.scoreMinimums.gold = GOLD_SCORE_DEFAULT_MINIMUM;
+  }
+  elements.smartScoreMinimum.value = String(state.scoreMinimums.smart);
+  elements.goldScoreMinimum.value = String(state.scoreMinimums.gold);
+}
+
+function writeScoreMinimums() {
+  try {
+    localStorage.setItem(SCORE_FILTER_STORAGE_KEY, JSON.stringify(state.scoreMinimums));
+  } catch {
+    // Score filters still apply in the current session if storage is blocked.
   }
 }
 
@@ -765,7 +812,8 @@ function evaluateReplayAndRender() {
 
   const smartResult = buildSmartMoneyAnalysis(context.session, context.market, context.news, context.zones, context.confirmation, context.candleScan);
   const goldResult = buildGoldIntelligenceAnalysis(smartResult, context.market, context.news, context.zones, context.confirmation, context.session, context.candleScan);
-  const activeResult = state.analysisMode === "gold" ? goldResult : smartResult;
+  let activeResult = state.analysisMode === "gold" ? goldResult : smartResult;
+  activeResult = applySignalLifecycle(activeResult);
   const entryProjection = buildEntryProjection(activeResult, context.market, context.zones, context.confirmation, context.candleScan, visibleCandles);
   const rsi = getReplayRsi(visibleCandles, activeResult.direction);
 
@@ -792,6 +840,7 @@ function evaluateReplayAndRender() {
   elements.targetLiquidity.textContent = activeResult.liquidity;
   elements.newsRisk.textContent = "Replay: news ignorées";
   elements.blockingReason.textContent = activeResult.blockingReason;
+  elements.signalLifecycleStatus.textContent = activeResult.signalLifecycleStatus || "en attente";
   elements.h1Direction.textContent = goldResult.h1Direction;
   elements.m15Direction.textContent = goldResult.m15Direction;
   elements.confirmationSummary.textContent = activeResult.confirmationSummary;
@@ -1721,12 +1770,14 @@ function evaluateAndRender() {
   const news = getNewsRisk();
   const zones = getKeyZones(market);
   const liveCandles = getLivePrecisionCandles(market);
+  if (liveCandles.length) state.basePrice = liveCandles[liveCandles.length - 1].close;
   const candleScan = buildCandleScan(liveCandles, market.bias);
   const confirmation = getEntryConfirmation(market, zones, candleScan);
   const rsi = getRsiConfirmation(market.bias);
   const smartResult = buildSmartMoneyAnalysis(session, market, news, zones, confirmation, candleScan);
   const goldResult = buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session, candleScan);
-  const activeResult = state.analysisMode === "gold" ? goldResult : smartResult;
+  let activeResult = state.analysisMode === "gold" ? goldResult : smartResult;
+  activeResult = applySignalLifecycle(activeResult);
   const entryProjection = buildEntryProjection(activeResult, market, zones, confirmation, candleScan, liveCandles);
 
   elements.sessionName.textContent = session.name;
@@ -1752,6 +1803,7 @@ function evaluateAndRender() {
   elements.targetLiquidity.textContent = activeResult.liquidity;
   elements.newsRisk.textContent = news.label;
   elements.blockingReason.textContent = activeResult.blockingReason;
+  elements.signalLifecycleStatus.textContent = activeResult.signalLifecycleStatus || "en attente";
   elements.h1Direction.textContent = goldResult.h1Direction;
   elements.m15Direction.textContent = goldResult.m15Direction;
   elements.confirmationSummary.textContent = activeResult.confirmationSummary;
@@ -1778,6 +1830,61 @@ function renderLivePrecisionChart(candles, context, activeResult, entryProjectio
     return;
   }
   drawReplayChart(candles, context, activeResult, entryProjection);
+}
+
+function applySignalLifecycle(result) {
+  const next = {
+    ...result,
+    badges: [...(result.badges || [])],
+    blocks: [...(result.blocks || [])],
+  };
+  const confirmed = next.status === "BUY" || next.status === "SELL";
+
+  if (confirmed) {
+    if (state.signalFlow.activeDirection && state.signalFlow.activeDirection !== next.status) {
+      state.signalFlow.activeDirection = null;
+      state.signalFlow.status = "invalidé";
+      state.signalFlow.invalidatedTick = state.tick;
+      return overrideSignalLifecycle(next, "Signal invalidé", "Signal invalidé — attente nouveau setup", "invalidé");
+    }
+    if (state.signalFlow.status === "invalidé" && state.tick - state.signalFlow.invalidatedTick < 2) {
+      return overrideSignalLifecycle(next, "Attente nouveau setup", "Attente nouveau setup — laisser le marché reformer une configuration", "en attente");
+    }
+    state.signalFlow.activeDirection = next.status;
+    state.signalFlow.status = "actif";
+    next.signalLifecycleStatus = "actif";
+    return next;
+  }
+
+  if (state.signalFlow.activeDirection) {
+    state.signalFlow.activeDirection = null;
+    state.signalFlow.status = "invalidé";
+    state.signalFlow.invalidatedTick = state.tick;
+    return overrideSignalLifecycle(next, "Signal invalidé", "Signal invalidé — attente nouveau setup", "invalidé");
+  }
+
+  if (state.signalFlow.status === "invalidé") {
+    if (state.tick - state.signalFlow.invalidatedTick < 2) {
+      return overrideSignalLifecycle(next, "Attente nouveau setup", "Attente nouveau setup — laisser le marché reformer une configuration", "en attente");
+    }
+    state.signalFlow.status = "en attente";
+  }
+
+  next.signalLifecycleStatus = next.signalLifecycleStatus || "en attente";
+  return next;
+}
+
+function overrideSignalLifecycle(result, setupState, reason, lifecycleStatus) {
+  return {
+    ...result,
+    valid: false,
+    status: "ATTENTE",
+    setupState,
+    signalLifecycleStatus: lifecycleStatus,
+    blockingReason: reason,
+    reason,
+    badges: [["Signal", lifecycleStatus === "invalidé" ? "refused" : "pending"], ...(result.badges || [])],
+  };
 }
 
 function getSession() {
@@ -1878,17 +1985,124 @@ function scoreSetup(market, news, zones, confirmation, candleScan) {
   return clamp(Math.round(score), 0, 100);
 }
 
+function getFinalSignalValidation({ mode, direction, setup, market, news, zones, confirmation, candleScan, riskReward, score, scoreMinimum, h1Direction }) {
+  if (direction !== "BUY" && direction !== "SELL") {
+    return buildValidationFailure("Aucun trade qualifié", "Aucun trade qualifié — attendre meilleure configuration", "en attente");
+  }
+  if (!market.valid) {
+    return buildValidationFailure("Aucun trade qualifié", market.context === "range dangereux" ? "Marché compressé" : "Météo du marché non alignée", "en attente");
+  }
+  if (!news.valid) return buildValidationFailure("Setup incomplet", news.reason, "en attente");
+  if (!zones.valid) return buildValidationFailure("Setup incomplet", zones.liquidityTaken ? zones.reason : "Liquidité non prise", "en attente");
+  if (mode === "gold" && h1Direction?.bias && h1Direction.bias !== "WAIT" && h1Direction.bias !== direction) {
+    return buildValidationFailure("Signal refusé", "Signal refusé : contre tendance H1", "refusé");
+  }
+  if (mode === "smart" && h1Direction?.bias && h1Direction.bias !== "WAIT" && h1Direction.bias !== direction && market.score >= 62) {
+    return buildValidationFailure("Signal refusé", "Signal refusé : marché clairement contre tendance H1", "refusé");
+  }
+  if (!confirmation.choch) return buildValidationFailure("Setup incomplet", "Order Block détecté mais pas de ChoCH", "en attente");
+  if (!confirmation.candleClose) return buildValidationFailure("Setup incomplet", "Pas de confirmation bougie", "en attente");
+
+  const candleReview = getCandleConfirmationReview(direction, candleScan, setup);
+  if (!candleReview.valid) return buildValidationFailure("Setup incomplet", candleReview.reason, "en attente");
+
+  const zoneReview = getZoneArrivalReview(direction, candleScan, setup);
+  if (!zoneReview.valid) return buildValidationFailure("Entrée potentielle", zoneReview.reason, "en attente");
+
+  const spaceReview = getTp1SpaceReview(setup);
+  if (!spaceReview.valid) return buildValidationFailure("Signal refusé", spaceReview.reason, "refusé");
+
+  if (!riskReward.valid) {
+    const reason = riskReward.rr < 1 ? "Signal refusé : RR insuffisant" : "Configuration valide mais RR insuffisant.";
+    return buildValidationFailure("Signal refusé", reason, "refusé");
+  }
+  if (score < scoreMinimum) {
+    return buildValidationFailure("Aucun trade qualifié", "Aucun trade qualifié — attendre meilleure configuration", "en attente");
+  }
+
+  return {
+    valid: true,
+    setupState: "Setup complet",
+    statusKind: "actif",
+    blockingReason: "Aucun",
+    reason: "Validation finale acceptée",
+  };
+}
+
+function buildValidationFailure(setupState, reason, statusKind) {
+  return {
+    valid: false,
+    setupState,
+    statusKind,
+    blockingReason: reason,
+    reason,
+  };
+}
+
+function getCandleConfirmationReview(direction, candleScan, setup) {
+  const candle = candleScan.current;
+  if (!candle) return { valid: false, reason: "Bougie de confirmation faible" };
+  if (candle.detections.doji || candle.detections.indecision) return { valid: false, reason: "Doji / indécision" };
+  if (candle.detections.tooSmall || candleScan.quality < 64) return { valid: false, reason: "Bougie de confirmation faible" };
+  if (candle.bodyRatio < 0.3) return { valid: false, reason: "Corps de bougie insuffisant" };
+  if (candle.relativeVolume < 0.75) return { valid: false, reason: "Volume trop faible" };
+
+  const entry = parsePrice(setup.entry);
+  const sl = parsePrice(setup.sl);
+  if (direction === "BUY") {
+    const hasRejection = candle.lowerWickRatio >= 0.25 || candle.detections.bullishRejection;
+    const closesWell = candle.closePosition >= 0.58 && (candle.direction === "bullish" || candle.closePosition >= 0.72);
+    if (!hasRejection) return { valid: false, reason: "Rejet clair sur zone absent" };
+    if (!closesWell) return { valid: false, reason: "Clôture BUY faible" };
+    if (Number.isFinite(sl) && candle.close < Math.min(entry, sl)) return { valid: false, reason: "Prix clôture sous la zone clé" };
+  }
+  if (direction === "SELL") {
+    const hasRejection = candle.upperWickRatio >= 0.25 || candle.detections.bearishRejection;
+    const closesWell = candle.closePosition <= 0.42 && (candle.direction === "bearish" || candle.closePosition <= 0.28);
+    if (!hasRejection) return { valid: false, reason: "Rejet clair sur zone absent" };
+    if (!closesWell) return { valid: false, reason: "Clôture SELL faible" };
+    if (Number.isFinite(sl) && candle.close > Math.max(entry, sl)) return { valid: false, reason: "Prix clôture au-dessus de la zone clé" };
+  }
+  return { valid: true, reason: candleScan.summary };
+}
+
+function getZoneArrivalReview(direction, candleScan, setup) {
+  const candle = candleScan.current;
+  const entry = parsePrice(setup.entry);
+  const sl = parsePrice(setup.sl);
+  if (!candle || !Number.isFinite(entry) || !Number.isFinite(sl)) return { valid: false, reason: "Prix trop loin de la zone" };
+  const risk = Math.max(0.0001, Math.abs(entry - sl));
+  const distance = Math.abs(candle.close - entry);
+  if (distance > risk * 1.25) return { valid: false, reason: "Prix trop loin de la zone" };
+  return { valid: true, reason: "Prix dans la zone" };
+}
+
+function getTp1SpaceReview(setup) {
+  const entry = parsePrice(setup.entry);
+  const sl = parsePrice(setup.sl);
+  const tp1 = parsePrice(setup.tp1);
+  if (![entry, sl, tp1].every(Number.isFinite)) return { valid: false, reason: "Pas assez d'espace avant TP" };
+  const risk = Math.abs(entry - sl);
+  const gain = Math.abs(tp1 - entry);
+  if (risk <= 0 || gain < Math.max(1, risk * 0.8)) return { valid: false, reason: "Signal refusé : espace insuffisant avant TP1" };
+  return { valid: true, reason: "Espace TP1 suffisant" };
+}
+
 function buildSmartMoneyAnalysis(session, market, news, zones, confirmation, candleScan) {
-  const score = scoreSetup(market, news, zones, confirmation, candleScan);
+  const h1Direction = getH1Direction(market);
+  const h1Against = market.bias !== "WAIT" && h1Direction.bias !== "WAIT" && h1Direction.bias !== market.bias;
+  const score = clamp(scoreSetup(market, news, zones, confirmation, candleScan) - (h1Against ? 8 : 0), 0, 100);
   const coreValid = market.valid && news.valid && zones.valid && confirmation.valid && candleScan.valid;
   const direction = coreValid ? market.bias : "WAIT";
   const setup = buildSetup(direction, zones, confirmation);
   const riskReward = setup.riskReward;
+  const finalValidation = coreValid
+    ? getFinalSignalValidation({ mode: "smart", direction, setup, market, news, zones, confirmation, candleScan, riskReward, score, scoreMinimum: state.scoreMinimums.smart, h1Direction })
+    : buildValidationFailure("Setup incomplet", getMissingReason(market, news, zones, confirmation, candleScan), "en attente");
   const rrBlocked = coreValid && !riskReward.valid;
-  const valid = coreValid && riskReward.valid;
-  const missingReason = rrBlocked ? "Configuration valide mais RR insuffisant." : getMissingReason(market, news, zones, confirmation, candleScan);
+  const valid = finalValidation.valid;
   const scoreLabel = score >= 85 ? "setup fort" : score >= 70 ? "signal possible" : score >= 50 ? "attente" : "pas de trade";
-  const status = valid ? direction : rrBlocked ? "SIGNAL REFUSÉ" : "ATTENTE";
+  const status = valid ? direction : finalValidation.statusKind === "refusé" ? "SIGNAL REFUSÉ" : finalValidation.setupState === "Aucun trade qualifié" ? "AUCUN TRADE" : "ATTENTE";
 
   return {
     id: "smart",
@@ -1896,22 +2110,22 @@ function buildSmartMoneyAnalysis(session, market, news, zones, confirmation, can
     valid,
     direction,
     status,
-    setupState: valid ? "Setup complet" : rrBlocked ? "Signal refusé" : "Setup incomplet",
+    setupState: valid ? "Setup complet" : finalValidation.setupState,
     score,
     scoreLabel,
-    biasLabel: market.action,
+    biasLabel: h1Against ? `${market.action} · H1 contraire` : market.action,
     setup,
     riskReward,
     timeframe: confirmation.timeframe,
     zone: zones.primary,
     liquidity: zones.targetLiquidity,
-    blockingReason: valid ? "Aucun" : rrBlocked ? `Signal refusé : RR insuffisant (${riskReward.display}, minimum ${formatRiskRewardValue(state.riskRewardMinimum)})` : missingReason,
+    h1Direction: h1Direction.label,
+    signalLifecycleStatus: valid ? "actif" : finalValidation.statusKind,
+    blockingReason: valid ? "Aucun" : finalValidation.blockingReason,
     confirmationSummary: confirmation.reason,
     reason: valid
       ? `${direction} confirmé: Entrée ${setup.entry}, SL ${setup.sl}, TP1 ${setup.tp1}, RR ${riskReward.display}. ${market.context}, ${zones.primary}, ${confirmation.reason}`
-      : rrBlocked
-        ? `Configuration valide mais RR insuffisant. Signal refusé : RR insuffisant (RR ${riskReward.display}, minimum ${formatRiskRewardValue(state.riskRewardMinimum)}).`
-        : `Setup incomplet — ${missingReason}`,
+      : finalValidation.reason,
     badges: buildSmartBadges(market, news, valid, candleScan, riskReward, rrBlocked),
     blocks: [
       ["Météo du marché", market.valid, market.context],
@@ -1919,6 +2133,9 @@ function buildSmartMoneyAnalysis(session, market, news, zones, confirmation, can
       ["Liquidité", zones.valid, zones.reason],
       ["Order Blocks", zones.valid, zones.primary],
       ["Confirmation d'entrée", confirmation.valid, confirmation.reason],
+      ["Réaction bougie", !coreValid || getCandleConfirmationReview(direction, candleScan, setup).valid, coreValid ? getCandleConfirmationReview(direction, candleScan, setup).reason : "En attente"],
+      ["Score minimum", !coreValid || score >= state.scoreMinimums.smart, `${score}/100 · minimum ${state.scoreMinimums.smart}`],
+      ["Direction H1", !h1Against || market.score < 62, h1Direction.label],
       ["Risk/Reward minimum", !coreValid || riskReward.valid, coreValid ? `${riskReward.display} · ${riskReward.classification} · minimum ${formatRiskRewardValue(state.riskRewardMinimum)}` : "Calculé après validation structure"],
       ["Candle Scanner", candleScan.valid, `${candleScan.quality}/100 · ${candleScan.summary}`],
       ["News économiques", news.valid, news.reason],
@@ -1949,14 +2166,32 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
   ];
   const advancedCount = advancedConfirmations.filter((item) => item[1]).length;
   const rrRefused = smartResult.status === "SIGNAL REFUSÉ";
+  const h1Contrary = smartResult.direction !== "WAIT" && h1Direction.bias !== "WAIT" && h1Direction.bias !== smartResult.direction;
   const mandatoryValid = smartResult.valid && h1Aligned && h1OrderBlock && m15Refinement;
-  const valid = mandatoryValid && advancedCount >= 2;
-  const refused = rrRefused || (smartResult.valid && smartResult.direction !== "WAIT" && !h1Aligned);
-  const status = valid ? smartResult.direction : refused ? "SIGNAL REFUSÉ" : "ATTENTE";
   const score = scoreGoldSetup(smartResult.score, h1Aligned, h1OrderBlock, m15Refinement, advancedCount, candleScan.quality);
   const missingAdvanced = advancedConfirmations.filter((item) => !item[1]).map((item) => item[0]);
   const confirmedAdvanced = advancedConfirmations.filter((item) => item[1]).map((item) => item[0]);
-  const reason = getGoldReason({
+  const candidateSetup = smartResult.direction !== "WAIT" ? smartResult.setup : buildSetup("WAIT", zones, confirmation);
+  const candidateRiskReward = smartResult.direction !== "WAIT" ? smartResult.riskReward : candidateSetup.riskReward;
+  const preFinalValid = mandatoryValid && advancedCount >= 2;
+  const finalValidation = preFinalValid
+    ? getFinalSignalValidation({ mode: "gold", direction: smartResult.direction, setup: candidateSetup, market, news, zones, confirmation, candleScan, riskReward: candidateRiskReward, score, scoreMinimum: state.scoreMinimums.gold, h1Direction })
+    : buildValidationFailure(h1Contrary || rrRefused ? "Signal refusé" : "Setup incomplet", h1Contrary ? "Signal refusé : contre tendance H1" : getGoldReason({
+      smartResult,
+      valid: false,
+      refused: rrRefused || h1Contrary,
+      h1Direction,
+      h1Aligned,
+      h1OrderBlock,
+      m15Refinement,
+      advancedCount,
+      confirmedAdvanced,
+      missingAdvanced,
+    }), h1Contrary || rrRefused ? "refusé" : "en attente");
+  const valid = finalValidation.valid;
+  const refused = rrRefused || h1Contrary || finalValidation.statusKind === "refusé";
+  const status = valid ? smartResult.direction : refused ? "SIGNAL REFUSÉ" : finalValidation.setupState === "Aucun trade qualifié" ? "AUCUN TRADE" : "ATTENTE";
+  const reason = valid ? getGoldReason({
     smartResult,
     valid,
     refused,
@@ -1967,7 +2202,7 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
     advancedCount,
     confirmedAdvanced,
     missingAdvanced,
-  });
+  }) : finalValidation.reason;
 
   return {
     id: "gold",
@@ -1975,17 +2210,18 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
     valid,
     direction: valid ? smartResult.direction : "WAIT",
     status,
-    setupState: valid ? "Setup premium" : refused ? "Signal refusé" : "Setup incomplet",
+    setupState: valid ? "Setup premium" : finalValidation.setupState,
     score,
     scoreLabel: score >= 90 ? "setup premium" : score >= 75 ? "setup avancé possible" : score >= 60 ? "attente" : "pas de trade",
-    biasLabel: rrRefused ? "RR insuffisant" : refused ? "Tendance contraire" : valid ? "Confluence forte" : "Attente avancée",
-    setup: valid || rrRefused ? smartResult.setup : buildSetup("WAIT", zones, confirmation),
-    riskReward: valid || rrRefused ? smartResult.riskReward : buildSetup("WAIT", zones, confirmation).riskReward,
+    biasLabel: rrRefused ? "RR insuffisant" : h1Contrary ? "Contre tendance H1" : valid ? "Confluence forte" : "Attente avancée",
+    setup: valid || refused ? candidateSetup : buildSetup("WAIT", zones, confirmation),
+    riskReward: valid || refused ? candidateRiskReward : buildSetup("WAIT", zones, confirmation).riskReward,
     timeframe: valid ? smartResult.timeframe : "H1 + M15",
     zone: h1OrderBlock ? `Order Block H1 ${smartResult.direction === "SELL" ? "bearish" : "bullish"}` : "Order Block H1 absent",
     liquidity: smartResult.liquidity,
     h1Direction: h1Direction.label,
     m15Direction: m15Direction.label,
+    signalLifecycleStatus: valid ? "actif" : finalValidation.statusKind,
     blockingReason: valid ? "Aucun" : reason,
     confirmationSummary: confirmedAdvanced.length ? confirmedAdvanced.join(", ") : "Aucune confirmation avancée",
     reason,
@@ -1994,6 +2230,7 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
       ["Mode 1 valide", smartResult.valid, smartResult.valid ? `${smartResult.status} Mode 1 confirmé` : smartResult.blockingReason],
       ["Risk/Reward minimum", !rrRefused && (!smartResult.riskReward || smartResult.riskReward.valid), smartResult.riskReward ? `${smartResult.riskReward.display} · ${smartResult.riskReward.classification} · minimum ${formatRiskRewardValue(state.riskRewardMinimum)}` : "En attente"],
       ["Direction H1 obligatoire", h1Aligned, h1Aligned ? h1Direction.label : `Tendance H1: ${h1Direction.label}`],
+      ["Score minimum", score >= state.scoreMinimums.gold, `${score}/100 · minimum ${state.scoreMinimums.gold}`],
       ["Order Block H1 obligatoire", h1OrderBlock, h1OrderBlock ? "OB H1 valide" : "OB H1 non validé"],
       ["Raffinement M15 obligatoire", m15Refinement, m15Refinement ? m15Direction.label : "pas de raffinement M15"],
       ["Candle Scanner multi-timeframe", candleScan.mtf.h1.valid && candleScan.mtf.m15.valid && candleScan.mtf.entry.valid, `H1 ${candleScan.mtf.h1.quality}/100 · M15 ${candleScan.mtf.m15.quality}/100 · Entrée ${candleScan.mtf.entry.quality}/100`],
@@ -2145,7 +2382,7 @@ function calculateRiskReward(direction, setup) {
   const risk = Math.abs(entry - sl);
   const gainPotential = Math.abs(tp2 - entry);
   const rr = risk > 0 ? gainPotential / risk : 0;
-  const valid = rr >= minimum && rr >= 1;
+  const valid = rr >= 1 && rr >= minimum;
   return {
     valid,
     rr,
@@ -2154,15 +2391,15 @@ function calculateRiskReward(direction, setup) {
     riskPoints: formatPoints(risk),
     gainPotentialPoints: formatPoints(gainPotential),
     minimum,
-    reason: valid ? `RR ${formatRiskRewardValue(rr)} accepté` : "Signal refusé : RR insuffisant",
+    reason: valid ? `RR ${formatRiskRewardValue(rr)} accepté` : rr < 1 ? "Signal refusé : RR insuffisant" : "Configuration valide mais RR insuffisant",
   };
 }
 
 function classifyRiskReward(rr) {
   if (rr < 1) return "Refusé";
-  if (rr < 1.5) return "Faible";
-  if (rr < 2) return "Acceptable";
-  if (rr <= 3) return "Bon";
+  if (rr < 1.2) return "Faible";
+  if (rr < 1.5) return "Acceptable";
+  if (rr <= 2) return "Bon";
   return "Premium";
 }
 
@@ -2183,10 +2420,11 @@ function getMissingReason(market, news, zones, confirmation, candleScan) {
 function buildEntryProjection(activeResult, market, zones, confirmation, candleScan, candles = []) {
   const confirmed = activeResult.status === "BUY" || activeResult.status === "SELL";
   const refused = activeResult.status === "SIGNAL REFUSÉ";
-  const direction = confirmed || refused ? activeResult.direction : inferProjectionDirection(activeResult, market, zones);
+  const noTrade = activeResult.status === "AUCUN TRADE";
+  const direction = noTrade ? "WAIT" : confirmed || refused ? activeResult.direction : inferProjectionDirection(activeResult, market, zones);
   const hasDirection = direction === "BUY" || direction === "SELL";
-  const stage = refused ? "refused" : getEntryProjectionStage(confirmed, market, zones, confirmation, candleScan);
-  const setup = confirmed || refused ? activeResult.setup : hasDirection ? buildSetup(direction, zones, confirmation) : buildSetup("WAIT", zones, confirmation);
+  const stage = noTrade ? "none" : refused ? "refused" : getEntryProjectionStage(confirmed, market, zones, confirmation, candleScan);
+  const setup = confirmed || refused || noTrade ? activeResult.setup : hasDirection ? buildSetup(direction, zones, confirmation) : buildSetup("WAIT", zones, confirmation);
   const metrics = buildPositionMetrics(direction, setup, stage, candles);
 
   return {
@@ -2195,7 +2433,7 @@ function buildEntryProjection(activeResult, market, zones, confirmation, candleS
     setup,
     metrics,
     statusLabel: getProjectionStatusLabel(stage, direction),
-    reason: refused ? activeResult.reason : getProjectionReason(stage, direction, zones, confirmation, candleScan, activeResult),
+    reason: refused || noTrade ? activeResult.reason : getProjectionReason(stage, direction, zones, confirmation, candleScan, activeResult),
   };
 }
 
@@ -2214,6 +2452,7 @@ function getEntryProjectionStage(confirmed, market, zones, confirmation, candleS
 }
 
 function getProjectionStatusLabel(stage, direction) {
+  if (stage === "none") return "Aucun trade qualifié";
   if (stage === "refused") return "Signal refusé";
   if (stage === "confirmed") return `${direction} confirmé`;
   if (stage === "imminent") return "Entrée imminente — prépare-toi";
@@ -2402,7 +2641,7 @@ function renderBadge([label, type]) {
 function getStatusColor(status) {
   if (status === "BUY") return "var(--green)";
   if (status === "SELL") return "var(--red)";
-  if (status === "SIGNAL REFUSÉ") return "var(--red)";
+  if (status === "SIGNAL REFUSÉ" || status === "AUCUN TRADE") return "var(--red)";
   return "var(--gold)";
 }
 

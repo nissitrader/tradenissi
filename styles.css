@@ -374,7 +374,8 @@ button:active {
   accent-color: var(--gold);
 }
 
-.risk-reward-control {
+.risk-reward-control,
+.score-filter-control {
   display: grid;
   gap: 8px;
   margin: 13px;
@@ -384,19 +385,22 @@ button:active {
   background: rgba(231, 184, 78, 0.055);
 }
 
-.risk-reward-control label {
+.risk-reward-control label,
+.score-filter-control label {
   display: grid;
   gap: 7px;
 }
 
-.risk-reward-control span {
+.risk-reward-control span,
+.score-filter-control span {
   color: var(--gold);
   font-size: 0.74rem;
   font-weight: 800;
   text-transform: uppercase;
 }
 
-.risk-reward-control select {
+.risk-reward-control select,
+.score-filter-control select {
   min-height: 34px;
   width: 100%;
   border: 1px solid var(--line);

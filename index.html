@@ -141,9 +141,30 @@
               <span>RR Minimum</span>
               <select id="riskRewardMinimum">
                 <option value="1">1.0</option>
+                <option value="1.2">1.2</option>
                 <option value="1.5">1.5</option>
                 <option value="2">2.0</option>
-                <option value="3">3.0</option>
+              </select>
+            </label>
+          </section>
+
+          <section class="score-filter-control" aria-label="Filtre score minimum">
+            <label>
+              <span>Score Smart Money</span>
+              <select id="smartScoreMinimum">
+                <option value="60">60</option>
+                <option value="65">65</option>
+                <option value="70">70</option>
+                <option value="75">75</option>
+              </select>
+            </label>
+            <label>
+              <span>Score Gold Intelligence</span>
+              <select id="goldScoreMinimum">
+                <option value="75">75</option>
+                <option value="80">80</option>
+                <option value="85">85</option>
+                <option value="90">90</option>
               </select>
             </label>
           </section>
@@ -314,6 +335,10 @@
               <div>
                 <dt>Classification RR</dt>
                 <dd id="rrClassification">--</dd>
+              </div>
+              <div>
+                <dt>Statut signal</dt>
+                <dd id="signalLifecycleStatus">En attente</dd>
               </div>
               <div>
                 <dt>Candle Quality</dt>
