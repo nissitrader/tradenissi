@@ -105,6 +105,9 @@ const state = {
   topDownZones: [],
   chartZoneHitboxes: [],
   selectedZone: null,
+  chartPreviewZoneId: null,
+  chartPreviewUntil: 0,
+  chartPreviewTimer: null,
   marketFlow: {
     status: "active",
     lastUpdateAt: 0,
@@ -1252,6 +1255,10 @@ function clearTsrOverlayCanvas() {
   state.chartZoneHitboxes = [];
   state.topDownZones = [];
   state.selectedZone = null;
+  state.chartPreviewZoneId = null;
+  state.chartPreviewUntil = 0;
+  if (state.chartPreviewTimer) window.clearTimeout(state.chartPreviewTimer);
+  state.chartPreviewTimer = null;
   renderTsrAnalysisPanel({ zones: [] });
   renderSelectedZoneInfo();
 }
@@ -1394,25 +1401,12 @@ function scheduleTopDownAnalysis(cacheKey, candles, context, activeResult, entry
 }
 
 function getVisibleClassicPriceValues(candles, visibleStartIndex) {
-  const classic = state.classicVisibility;
-  const values = [];
-  const collect = (series) => values.push(...series.slice(visibleStartIndex).filter(Number.isFinite));
-  if (classic.ema20) collect(calculateEmaSeries(candles, 20));
-  if (classic.ema50) collect(calculateEmaSeries(candles, 50));
-  if (classic.ema200) collect(calculateEmaSeries(candles, 200));
-  if (classic.vwap) collect(calculateVwapSeries(candles));
-  if (classic.superTrend) collect(calculateSuperTrendSeries(candles).map((item) => item?.value));
-  return values;
+  return [];
 }
 
 function drawClassicIndicators(ctx, geometry, candles) {
   const classic = state.classicVisibility;
   if (classic.volume) drawVolumeBars(ctx, geometry, candles);
-  if (classic.ema20) drawIndicatorSeries(ctx, geometry, calculateEmaSeries(candles, 20), "#3bd8bd", "EMA 20");
-  if (classic.ema50) drawIndicatorSeries(ctx, geometry, calculateEmaSeries(candles, 50), "#74a7ff", "EMA 50");
-  if (classic.ema200) drawIndicatorSeries(ctx, geometry, calculateEmaSeries(candles, 200), "#e7b84e", "EMA 200");
-  if (classic.vwap) drawIndicatorSeries(ctx, geometry, calculateVwapSeries(candles), "#dcd6c8", "VWAP");
-  if (classic.superTrend) drawSuperTrendSeries(ctx, geometry, calculateSuperTrendSeries(candles));
 }
 
 function drawVolumeBars(ctx, geometry, candles) {
@@ -1806,88 +1800,23 @@ function findEqualLiquidity(segment, field) {
 }
 
 function drawReplayOverlays(ctx, rect, context, activeResult, geometry, entryProjection, topDownAnalysis = { zones: [] }) {
-  const visible = state.smartMoneyVisibility;
-  const { priceToY, candleToX, visible: candles, visibleStartIndex, plotRight } = geometry;
-  const highY = priceToY(context.previousHigh);
-  const lowY = priceToY(context.previousLow);
-  const lastIndex = visibleStartIndex + candles.length - 1;
-  const swingHighIndex = findSwingIndex(candles, "high") + visibleStartIndex;
-  const swingLowIndex = findSwingIndex(candles, "low") + visibleStartIndex;
-
   drawTopDownZones(ctx, rect, geometry, topDownAnalysis.zones || []);
-  if (visible.equalHigh || visible.previousHL) drawReplayLine(ctx, highY, "#74a7ff", "Previous High / EQH", rect);
-  if (visible.equalLow || visible.previousHL) drawReplayLine(ctx, lowY, "#74a7ff", "Previous Low / EQL", rect);
-  if (visible.liquiditySweep && context.zones.liquidityTaken) {
-    const sweepIndex = context.market.bias === "SELL" ? swingHighIndex : swingLowIndex;
-    const sweepPrice = context.market.bias === "SELL" ? context.previousHigh : context.previousLow;
-    drawReplayLabel(ctx, candleToX(sweepIndex) + 8, priceToY(sweepPrice) - 18, "Sweep", "#74a7ff");
-  }
-  if (visible.bos && context.confirmation.choch) {
-    const bosY = context.market.bias === "SELL" ? lowY : highY;
-    drawAnchoredSegment(ctx, candleToX(swingLowIndex), bosY, candleToX(lastIndex), bosY, "#46d17b", "BOS");
-  }
-  if (visible.choch && context.confirmation.choch) {
-    const chochIndex = Math.max(visibleStartIndex, lastIndex - 8);
-    const chochY = priceToY(context.last.close);
-    drawAnchoredSegment(ctx, candleToX(chochIndex), chochY, candleToX(lastIndex), chochY, "#e7b84e", "ChoCH");
-  }
-  if (visible.idm) {
-    const idmIndex = Math.max(visibleStartIndex, lastIndex - 18);
-    const idmPrice = candles[Math.max(0, candles.length - 18)]?.close || context.last.close;
-    drawAnchoredSegment(ctx, candleToX(idmIndex), priceToY(idmPrice), candleToX(Math.min(lastIndex, idmIndex + 8)), priceToY(idmPrice), "#101010", "IDM");
-  }
-  if (visible.target) {
-    const targetPrice = context.market.bias === "SELL" ? context.previousLow : context.previousHigh;
-    drawAnchoredSegment(ctx, candleToX(Math.max(visibleStartIndex, lastIndex - 24)), priceToY(targetPrice), Math.min(plotRight, candleToX(lastIndex) + 80), priceToY(targetPrice), "#111", "Target");
-  }
-  if (visible.trendlines) {
-    ctx.strokeStyle = "rgba(116, 167, 255, 0.75)";
-    ctx.beginPath();
-    ctx.moveTo(candleToX(Math.max(visibleStartIndex, lastIndex - 42)), priceToY(context.previousLow));
-    ctx.lineTo(candleToX(lastIndex), priceToY(context.last.close));
-    ctx.stroke();
-  }
-  const projectionZone = (topDownAnalysis.zones || []).find((zone) => zone.direction === entryProjection?.direction && zone.status !== "invalidée");
-  drawReplayEntryProjection(ctx, rect, entryProjection, geometry, projectionZone);
+  drawReplayEntryProjection(ctx, rect, entryProjection, geometry);
 }
 
 function drawTopDownZones(ctx, rect, geometry, zones) {
   state.chartZoneHitboxes = [];
-  const primaryZone = getPrimaryChartZone(zones);
-  zones.forEach((zone) => {
-    if (!shouldDrawTopDownZone(zone, primaryZone)) return;
-    drawTopDownZone(ctx, rect, geometry, zone);
-  });
+  const previewZone = getActiveChartPreviewZone(zones);
+  if (previewZone) drawTopDownZone(ctx, rect, geometry, previewZone);
 }
 
-function shouldDrawTopDownZone(zone, primaryZone = null) {
-  const visible = state.smartMoneyVisibility;
-  const typeVisible = zone.type === "OB"
-    ? visible.orderBlocks
-    : zone.type === "FVG"
-      ? visible.fvg
-      : zone.type === "OTE"
-        ? visible.ote || visible.premiumDiscount
-        : visible.equalHigh || visible.equalLow || visible.liquiditySweep || visible.previousHL;
-  if (!typeVisible) return false;
-  const selected = state.selectedZone?.id === zone.id;
-  const primary = primaryZone?.id === zone.id;
-  if (selected) return true;
-  if (zone.status === "zone future") return primary && Boolean(visible.futureZones || visible.entryZones);
-  if (zone.status === "entrée potentielle") return primary && Boolean(visible.potentialEntries);
-  if (zone.status === "entrée imminente") return Boolean(visible.imminentEntries);
-  if (zone.status === "signal confirmé") return Boolean(visible.confirmedSignals);
-  if (zone.status === "invalidée") return false;
-  return true;
-}
-
-function getPrimaryChartZone(zones) {
-  return zones
-    .filter((zone) => zone.status === "entrée imminente" || zone.status === "entrée potentielle" || zone.status === "signal confirmé")
-    .sort((a, b) => {
-      const rank = { "signal confirmé": 3, "entrée imminente": 2, "entrée potentielle": 1 };
-      return (rank[b.status] || 0) - (rank[a.status] || 0) || b.score - a.score;
-    })[0] || null;
+function getActiveChartPreviewZone(zones) {
+  if (!state.chartPreviewZoneId) return null;
+  if (Date.now() > state.chartPreviewUntil) {
+    clearChartPreviewZone(false);
+    return null;
+  }
+  return zones.find((zone) => zone.id === state.chartPreviewZoneId) || null;
 }
 
 function drawTopDownZone(ctx, rect, geometry, zone) {
@@ -2043,29 +1972,15 @@ function drawReplayEntryProjection(ctx, rect, projection, geometry, sourceZone =
   const zoneTop = Number.isFinite(sl) ? Math.min(zoneY, slY) : zoneY;
   const zoneHeight = Number.isFinite(sl) ? Math.min(160, Math.max(32, Math.abs(slY - zoneY))) : 48;
   const zoneLeft = candleToX(visibleStartIndex + Math.max(6, geometry.visible.length - 18));
-  const zoneWidth = Math.max(90, rect.width - zoneLeft - 112);
   const stageRank = { future: 1, potential: 2, imminent: 3, confirmed: 4 }[projection.stage] || 0;
-  if (!sourceZone && stageRank < 4) return;
+  if (stageRank < 4 || !visible.confirmedSignals) return;
   const projectionNearView = !Number.isFinite(entry) || entryNear || slNear || tp1Near;
   if (!projectionNearView) {
     drawReplayLabel(ctx, zoneLeft, isBuy ? rect.height - 62 : 34, `${projection.direction} hors echelle visible`, color);
     return;
   }
 
-  if ((visible.entryZones || visible.futureZones) && visible.futureZones && stageRank >= 1) {
-    const sourceTop = sourceZone ? clampPriceY(sourceZone.top) : zoneTop;
-    const sourceBottom = sourceZone ? clampPriceY(sourceZone.bottom) : zoneTop + zoneHeight;
-    const anchoredTop = Math.min(sourceTop, sourceBottom);
-    const anchoredHeight = Math.max(20, Math.min(160, Math.abs(sourceBottom - sourceTop)));
-    ctx.fillStyle = isBuy ? "rgba(70, 209, 123, 0.08)" : "rgba(239, 98, 98, 0.08)";
-    ctx.strokeStyle = isBuy ? "rgba(70, 209, 123, 0.34)" : "rgba(239, 98, 98, 0.34)";
-    ctx.strokeRect(zoneLeft, anchoredTop, zoneWidth, anchoredHeight);
-    ctx.fillRect(zoneLeft, anchoredTop, zoneWidth, anchoredHeight);
-    drawReplayLabel(ctx, zoneLeft + 8, clamp(anchoredTop - 28, 28, rect.height - 64), `Zone potentielle ${projection.direction}`, color);
-  }
-  if (visible.potentialEntries && stageRank >= 2) drawReplayLabel(ctx, zoneLeft + 8, zoneTop + zoneHeight + 8, "Entrée potentielle — attendre réaction", "#e7b84e");
-  if (visible.imminentEntries && stageRank >= 3) drawReplayLabel(ctx, zoneLeft + 8, zoneTop + zoneHeight + 38, "Entrée imminente — prépare-toi", color);
-  if (visible.confirmedSignals && stageRank >= 4) drawReplayLabel(ctx, zoneLeft + 8, Number.isFinite(tp1) ? priceToY(tp1) - 24 : zoneTop + zoneHeight + 68, `${projection.direction} confirmé`, color);
+  drawReplayLabel(ctx, zoneLeft + 8, Number.isFinite(tp1) ? priceToY(tp1) - 24 : zoneTop + zoneHeight + 68, `${projection.direction} confirmé`, color);
 
   const showPositionTool = stageRank >= 4 && ((isBuy && visible.longPositionTool) || (!isBuy && visible.shortPositionTool));
   if (showPositionTool) drawReplayPositionTool(ctx, rect, projection, geometry, color);
@@ -3666,6 +3581,10 @@ function renderRiskRewardDetails(riskReward) {
 
 function renderChartSignalAlert(activeResult, entryProjection) {
   const direction = activeResult.status;
+  const confirmed = direction === "BUY" || direction === "SELL";
+  elements.chartSignalAlert.classList.toggle("hidden", !confirmed);
+  elements.chartDecisionCard.classList.toggle("hidden", !confirmed);
+  if (!confirmed) return;
   elements.chartSignalAlert.classList.toggle("buy", direction === "BUY");
   elements.chartSignalAlert.classList.toggle("sell", direction === "SELL");
   elements.chartSignalAlert.classList.toggle("refused", direction === "SIGNAL REFUSÉ");
@@ -3834,19 +3753,22 @@ function renderTsrAnalysisPanel(topDownAnalysis = { zones: [] }) {
     return;
   }
 
+  const visible = state.smartMoneyVisibility;
   const groups = [
-    ["Order Blocks détectés", (zone) => zone.type === "OB"],
-    ["FVG détectés", (zone) => zone.type === "FVG"],
-    ["BOS / ChoCH", (zone) => zone.status === "signal confirmé" || zone.status === "entrée imminente"],
-    ["OTE 0.705", (zone) => zone.type === "OTE"],
-    ["Premium / Discount", (zone) => zone.type === "OTE" || zone.source === "premium / discount"],
-    ["Liquidité", (zone) => zone.type === "Liquidite"],
-    ["Zones futures", (zone) => zone.status === "zone future"],
-    ["Entrées potentielles", (zone) => zone.status === "entrée potentielle" || zone.status === "entrée imminente"],
+    ["Order Blocks détectés", visible.orderBlocks, (zone) => zone.type === "OB"],
+    ["FVG détectés", visible.fvg, (zone) => zone.type === "FVG"],
+    ["Liquidité", visible.equalHigh || visible.equalLow || visible.liquiditySweep || visible.previousHL, (zone) => zone.type === "Liquidite"],
+    ["BOS / ChoCH", visible.bos || visible.choch, (zone) => zone.status === "signal confirmé" || zone.status === "entrée imminente"],
+    ["OTE 0.705", visible.ote, (zone) => zone.type === "OTE"],
+    ["Premium / Discount", visible.premiumDiscount, (zone) => zone.type === "OTE" || zone.source === "premium / discount"],
+    ["Zones futures", visible.futureZones || visible.entryZones, (zone) => zone.status === "zone future"],
+    ["Entrées potentielles", visible.potentialEntries, (zone) => zone.status === "entrée potentielle"],
+    ["Entrées imminentes", visible.imminentEntries, (zone) => zone.status === "entrée imminente"],
   ];
 
   elements.tsrAnalysisList.innerHTML = groups
-    .map(([title, predicate]) => {
+    .map(([title, enabled, predicate]) => {
+      if (!enabled) return "";
       const items = zones.filter(predicate).slice(0, 5);
       if (!items.length) return "";
       return `
@@ -3861,22 +3783,73 @@ function renderTsrAnalysisPanel(topDownAnalysis = { zones: [] }) {
   elements.tsrAnalysisList.querySelectorAll("[data-zone-id]").forEach((button) => {
     button.addEventListener("click", () => selectTsrAnalysisZone(button.dataset.zoneId));
   });
+  elements.tsrAnalysisList.querySelectorAll("[data-preview-zone-id]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      previewTsrAnalysisZone(button.dataset.previewZoneId);
+    });
+  });
 }
 
 function renderTsrAnalysisZoneButton(zone) {
   const selected = state.selectedZone?.id === zone.id ? " selected" : "";
+  const previewActive = isChartPreviewActive(zone.id);
+  const priceRange = `${formatPrice(Math.min(zone.top, zone.bottom))} - ${formatPrice(Math.max(zone.top, zone.bottom))}`;
+  const typeLabel = zone.type === "Liquidite" ? "Liquidité" : zone.type;
   return `
-    <button type="button" class="tsr-zone-row${selected}" data-zone-id="${zone.id}">
-      <span>${zone.label}</span>
+    <article class="tsr-zone-row${selected}" data-zone-id="${zone.id}" tabindex="0">
+      <span>${zone.direction} ${zone.timeframe}</span>
       <strong>${zone.status}</strong>
-      <small>${zone.reason}</small>
-      <em>Score ${zone.score}/100 · ${zone.entry} / SL ${zone.sl}</em>
-    </button>
+      <small>Type : ${typeLabel} · Prix : ${priceRange}</small>
+      <small>Score : ${zone.score}/100 · ${zone.reason}</small>
+      <button type="button" class="tsr-zone-preview-button${previewActive ? " active" : ""}" data-preview-zone-id="${zone.id}">
+        ${previewActive ? "Masquer" : "Voir sur graphique"}
+      </button>
+    </article>
   `;
 }
 
 function selectTsrAnalysisZone(zoneId) {
   state.selectedZone = state.topDownZones.find((zone) => zone.id === zoneId) || null;
+  renderSelectedZoneInfo();
+  renderTsrAnalysisPanel({ zones: state.topDownZones });
+  const latest = state.lastChartRender;
+  if (!latest) return;
+  if (latest.liveOverlay && !state.replay.active) {
+    drawLiveTsrOverlay(latest.candles, latest.context, latest.activeResult, latest.entryProjection);
+  } else {
+    drawReplayChart(latest.candles, latest.context, latest.activeResult, latest.entryProjection);
+  }
+}
+
+function isChartPreviewActive(zoneId) {
+  return state.chartPreviewZoneId === zoneId && Date.now() <= state.chartPreviewUntil;
+}
+
+function previewTsrAnalysisZone(zoneId) {
+  const zone = state.topDownZones.find((item) => item.id === zoneId);
+  if (!zone) return;
+  state.selectedZone = zone;
+  if (isChartPreviewActive(zoneId)) {
+    clearChartPreviewZone(true);
+    return;
+  }
+  if (state.chartPreviewTimer) window.clearTimeout(state.chartPreviewTimer);
+  state.chartPreviewZoneId = zoneId;
+  state.chartPreviewUntil = Date.now() + 10000;
+  state.chartPreviewTimer = window.setTimeout(() => clearChartPreviewZone(true), 10000);
+  refreshTsrChartRender();
+}
+
+function clearChartPreviewZone(redraw = true) {
+  if (state.chartPreviewTimer) window.clearTimeout(state.chartPreviewTimer);
+  state.chartPreviewTimer = null;
+  state.chartPreviewZoneId = null;
+  state.chartPreviewUntil = 0;
+  if (redraw) refreshTsrChartRender();
+}
+
+function refreshTsrChartRender() {
   renderSelectedZoneInfo();
   renderTsrAnalysisPanel({ zones: state.topDownZones });
   const latest = state.lastChartRender;

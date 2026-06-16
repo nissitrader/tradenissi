@@ -57,6 +57,10 @@ button:active {
   transform: translateY(1px);
 }
 
+.hidden {
+  display: none !important;
+}
+
 .app-shell {
   min-height: 100vh;
   padding: 14px;
@@ -1010,6 +1014,7 @@ button:active {
   background: rgba(255, 255, 255, 0.025);
   color: var(--text);
   text-align: left;
+  cursor: pointer;
 }
 
 .tsr-zone-row:hover,
@@ -1037,6 +1042,28 @@ button:active {
   font-size: 0.69rem;
   font-style: normal;
   line-height: 1.35;
+}
+
+.tsr-zone-preview-button {
+  justify-self: start;
+  min-height: 28px;
+  margin-top: 4px;
+  padding: 5px 9px;
+  border: 1px solid rgba(231, 184, 78, 0.46);
+  border-radius: 6px;
+  background: rgba(231, 184, 78, 0.1);
+  color: #f7d875;
+  font-size: 0.68rem;
+  font-weight: 850;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.tsr-zone-preview-button:hover,
+.tsr-zone-preview-button.active {
+  border-color: rgba(59, 216, 189, 0.72);
+  background: rgba(59, 216, 189, 0.14);
+  color: #7ff5df;
 }
 
 .overlay-ob {
