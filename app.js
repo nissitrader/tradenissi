@@ -845,9 +845,10 @@ function evaluateReplayAndRender() {
   const context = buildReplayContext(visibleCandles);
   state.tick = state.replay.index;
   state.basePrice = context.last.close;
+  const advancedSmc = buildAdvancedSmcContext(visibleCandles, context.market, context.zones, context.confirmation, context.candleScan);
 
-  const smartResult = buildSmartMoneyAnalysis(context.session, context.market, context.news, context.zones, context.confirmation, context.candleScan);
-  const goldResult = buildGoldIntelligenceAnalysis(smartResult, context.market, context.news, context.zones, context.confirmation, context.session, context.candleScan, visibleCandles);
+  const smartResult = buildSmartMoneyAnalysis(context.session, context.market, context.news, context.zones, context.confirmation, context.candleScan, advancedSmc);
+  const goldResult = buildGoldIntelligenceAnalysis(smartResult, context.market, context.news, context.zones, context.confirmation, context.session, context.candleScan, visibleCandles, advancedSmc);
   let activeResult = state.analysisMode === "gold" ? goldResult : smartResult;
   activeResult = applySignalLifecycle(activeResult);
   const entryProjection = buildEntryProjection(activeResult, context.market, context.zones, context.confirmation, context.candleScan, visibleCandles);
@@ -1885,8 +1886,9 @@ function evaluateAndRender() {
   const candleScan = buildCandleScan(liveCandles, market.bias);
   const confirmation = getEntryConfirmation(market, zones, candleScan);
   const rsi = getRsiConfirmation(market.bias, liveCandles);
-  const smartResult = buildSmartMoneyAnalysis(session, market, news, zones, confirmation, candleScan);
-  const goldResult = buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session, candleScan, liveCandles);
+  const advancedSmc = buildAdvancedSmcContext(liveCandles, market, zones, confirmation, candleScan);
+  const smartResult = buildSmartMoneyAnalysis(session, market, news, zones, confirmation, candleScan, advancedSmc);
+  const goldResult = buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session, candleScan, liveCandles, advancedSmc);
   let activeResult = state.analysisMode === "gold" ? goldResult : smartResult;
   activeResult = applySignalLifecycle(activeResult);
   const entryProjection = buildEntryProjection(activeResult, market, zones, confirmation, candleScan, liveCandles);
@@ -2187,10 +2189,12 @@ function getKeyZones(market, candles = []) {
     const targetLiquidity = market.bias === "SELL" ? "Previous Low / London Low" : market.bias === "BUY" ? "Previous High / NY High" : "Liquidité en attente";
 
     return {
-      valid: market.valid && hasZone && liquidityTaken,
+      valid: market.valid && hasZone,
       primary,
       targetLiquidity,
       liquidityTaken,
+      hasOrderBlock: Boolean(orderBlock),
+      fvgPresent: Boolean(fvg),
       previousHigh,
       previousLow,
       reason: liquidityTaken ? "Liquidité prise sur les bougies live" : "Liquidité non prise",
@@ -2199,7 +2203,7 @@ function getKeyZones(market, candles = []) {
 
   const phase = state.tick % 6;
   const liquidityTaken = phase !== 2;
-  const valid = market.valid && liquidityTaken;
+  const valid = market.valid;
   const primary = market.bias === "SELL" ? "H1 bearish order block + EQH" : "M15 bullish order block + FVG";
   const targetLiquidity = market.bias === "SELL" ? "Previous Low / London Low" : "Previous High / NY High";
 
@@ -2208,6 +2212,8 @@ function getKeyZones(market, candles = []) {
     primary,
     targetLiquidity,
     liquidityTaken,
+    hasOrderBlock: valid,
+    fvgPresent: valid,
     reason: liquidityTaken ? "Liquidité prise" : "Liquidité non prise",
   };
 }
@@ -2255,18 +2261,130 @@ function getEntryConfirmation(market, zones, candleScan) {
   };
 }
 
-function scoreSetup(market, news, zones, confirmation, candleScan) {
+function buildAdvancedSmcContext(candles, market, zones, confirmation, candleScan) {
+  const empty = {
+    bosDisplacement: false,
+    fvgPresent: false,
+    liquidityTaken: Boolean(zones.liquidityTaken),
+    premiumDiscountAligned: false,
+    premiumDiscountLabel: "non respecté",
+    oteStatus: "absent",
+    oteTouched: false,
+    oteNear: false,
+    ote705: "--",
+    oteRangeLabel: "--",
+    htfZoneValid: Boolean(zones.valid),
+    m15Refinement: Boolean(zones.valid && confirmation.choch),
+    structuralSetup: null,
+    summary: "Confluence SMC avancée en attente",
+  };
+  if (!candles.length || market.bias === "WAIT") return empty;
+
+  const direction = market.bias;
+  const lookback = candles.slice(-96);
+  const last = lookback[lookback.length - 1];
+  const swingHigh = Math.max(...lookback.map((candle) => candle.high));
+  const swingLow = Math.min(...lookback.map((candle) => candle.low));
+  const range = Math.max(0.0001, swingHigh - swingLow);
+  const midpoint = swingLow + range * 0.5;
+  const current = candleScan.current;
+  const bosDisplacement = Boolean(confirmation.choch && current && (current.detections.displacement || current.bodyRatio >= 0.55 && current.relativeVolume >= 1.04));
+  const fvgPresent = Boolean(zones.fvgPresent || getReplayFvgZone(candles.slice(-72), direction, Math.max(0, candles.length - 72)));
+  const premiumDiscountAligned = direction === "BUY" ? last.close <= midpoint : last.close >= midpoint;
+  const premiumDiscountLabel = premiumDiscountAligned
+    ? direction === "BUY" ? "Discount respecté" : "Premium respecté"
+    : direction === "BUY" ? "Discount non respecté" : "Premium non respecté";
+  const ote = getOteContext(direction, last, swingHigh, swingLow, range);
+  const structuralSetup = buildStructuralSetup(direction, last, swingHigh, swingLow, range, zones);
+
+  return {
+    ...empty,
+    bosDisplacement,
+    fvgPresent,
+    premiumDiscountAligned,
+    premiumDiscountLabel,
+    oteStatus: ote.status,
+    oteTouched: ote.touched,
+    oteNear: ote.near,
+    ote705: formatPrice(ote.center),
+    oteRangeLabel: `${formatPrice(ote.lower)} - ${formatPrice(ote.upper)}`,
+    htfZoneValid: Boolean(zones.valid || zones.hasOrderBlock),
+    m15Refinement: Boolean(zones.valid && (fvgPresent || confirmation.choch)),
+    structuralSetup,
+    summary: `BOS displacement ${bosDisplacement ? "validé" : "faible"} · FVG ${fvgPresent ? "présent" : "absent"} · ${premiumDiscountLabel} · OTE ${ote.status}`,
+  };
+}
+
+function getOteContext(direction, last, swingHigh, swingLow, range) {
+  const buyLower = swingHigh - range * 0.79;
+  const buyUpper = swingHigh - range * 0.618;
+  const sellLower = swingLow + range * 0.618;
+  const sellUpper = swingLow + range * 0.79;
+  const lower = direction === "BUY" ? Math.min(buyLower, buyUpper) : Math.min(sellLower, sellUpper);
+  const upper = direction === "BUY" ? Math.max(buyLower, buyUpper) : Math.max(sellLower, sellUpper);
+  const center = direction === "BUY" ? swingHigh - range * 0.705 : swingLow + range * 0.705;
+  const touched = direction === "BUY" ? last.low <= upper && last.high >= lower : last.high >= lower && last.low <= upper;
+  const distance = last.close < lower ? lower - last.close : last.close > upper ? last.close - upper : 0;
+  const near = !touched && distance <= range * 0.08;
+  return {
+    lower,
+    upper,
+    center,
+    touched,
+    near,
+    status: touched ? "touché" : near ? "proche" : "absent",
+  };
+}
+
+function buildStructuralSetup(direction, last, swingHigh, swingLow, range, zones) {
+  if (direction !== "BUY" && direction !== "SELL") return null;
+  const buffer = Math.max(0.6, range * 0.035);
+  const entry = last.close;
+  const risk = direction === "BUY" ? Math.max(0.0001, entry - (swingLow - buffer)) : Math.max(0.0001, (swingHigh + buffer) - entry);
+  const sign = direction === "BUY" ? 1 : -1;
+  return {
+    entry: formatPrice(entry),
+    sl: formatPrice(direction === "BUY" ? swingLow - buffer : swingHigh + buffer),
+    tp1: formatPrice(entry + sign * risk * 1.35),
+    tp2: formatPrice(entry + sign * risk * 2.15),
+    tp3: formatPrice(entry + sign * risk * 3.2),
+    zone: zones.primary,
+    structural: true,
+  };
+}
+
+function scoreSmartMoneySetup(market, zones, confirmation, candleScan, riskReward, h1Direction, advancedSmc) {
   let score = 0;
-  score += clamp(market.score, 0, 30);
-  score += news.score;
-  score += zones.valid ? 22 : zones.liquidityTaken ? 13 : 7;
-  score += confirmation.valid ? 18 : confirmation.choch ? 12 : 5;
-  score += clamp(Math.round(candleScan.quality * 0.18), 0, 18);
-  if (!candleScan.valid) score -= 14;
+  score += advancedSmc.bosDisplacement ? 15 : 0;
+  score += advancedSmc.fvgPresent ? 10 : 0;
+  score += advancedSmc.liquidityTaken ? 15 : 0;
+  score += advancedSmc.premiumDiscountAligned ? 10 : 0;
+  score += advancedSmc.oteTouched || advancedSmc.oteNear ? 5 : 0;
+  score += confirmation.valid && candleScan.valid ? 20 : candleScan.valid ? 10 : 0;
+  score += market.valid && (h1Direction.bias === "WAIT" || h1Direction.bias === market.bias) ? 20 : market.valid ? 10 : 0;
+  score += riskReward.rr >= 1 ? 5 : 0;
+  if (!advancedSmc.bosDisplacement && confirmation.choch) score -= 8;
+  if (!candleScan.valid) score -= 12;
+  if (!riskReward.valid && riskReward.rr < 1) score -= 18;
   return clamp(Math.round(score), 0, 100);
 }
 
-function getFinalSignalValidation({ mode, direction, setup, market, news, zones, confirmation, candleScan, riskReward, score, scoreMinimum, h1Direction }) {
+function scoreGoldIntelligenceSetup(h1Aligned, h1OrderBlock, m15Refinement, confirmation, candleScan, riskReward, advancedSmc) {
+  let score = 0;
+  score += h1Aligned ? 15 : 0;
+  score += h1OrderBlock ? 15 : 0;
+  score += m15Refinement ? 10 : 0;
+  score += advancedSmc.bosDisplacement ? 15 : 0;
+  score += advancedSmc.fvgPresent ? 10 : 0;
+  score += advancedSmc.liquidityTaken ? 15 : 0;
+  score += advancedSmc.premiumDiscountAligned ? 10 : 0;
+  score += advancedSmc.oteTouched || advancedSmc.oteNear ? 5 : 0;
+  score += confirmation.valid && candleScan.valid ? 15 : 0;
+  score += riskReward.rr >= 1 ? 5 : 0;
+  return clamp(Math.round(score), 0, 100);
+}
+
+function getFinalSignalValidation({ mode, direction, setup, market, news, zones, confirmation, candleScan, riskReward, score, scoreMinimum, h1Direction, advancedSmc }) {
   if (direction !== "BUY" && direction !== "SELL") {
     return buildValidationFailure("Aucun trade qualifié", "Aucun trade qualifié — attendre meilleure configuration", "en attente");
   }
@@ -2282,6 +2400,14 @@ function getFinalSignalValidation({ mode, direction, setup, market, news, zones,
     return buildValidationFailure("Signal refusé", "Signal refusé : marché clairement contre tendance H1", "refusé");
   }
   if (!confirmation.choch) return buildValidationFailure("Setup incomplet", "Order Block détecté mais pas de ChoCH", "en attente");
+  if (mode === "gold") {
+    if (!advancedSmc?.htfZoneValid) return buildValidationFailure("Setup incomplet", "Zone HTF / OB H1 non valide", "en attente");
+    if (!advancedSmc?.m15Refinement) return buildValidationFailure("Setup incomplet", "Raffinement M15 absent", "en attente");
+    if (!advancedSmc?.bosDisplacement) return buildValidationFailure("Setup incomplet", "BOS displacement faible", "en attente");
+    if (!advancedSmc?.fvgPresent) return buildValidationFailure("Setup incomplet", "FVG / Imbalance absent apres BOS", "en attente");
+    if (!advancedSmc?.liquidityTaken) return buildValidationFailure("Setup incomplet", "Liquidite non prise avant impulsion", "en attente");
+    if (!advancedSmc?.premiumDiscountAligned) return buildValidationFailure("Setup incomplet", "Premium/Discount non respecte", "en attente");
+  }
   if (!confirmation.candleClose) return buildValidationFailure("Setup incomplet", "Pas de confirmation bougie", "en attente");
 
   const candleReview = getCandleConfirmationReview(direction, candleScan, setup);
@@ -2369,20 +2495,20 @@ function getTp1SpaceReview(setup) {
   return { valid: true, reason: "Espace TP1 suffisant" };
 }
 
-function buildSmartMoneyAnalysis(session, market, news, zones, confirmation, candleScan) {
+function buildSmartMoneyAnalysis(session, market, news, zones, confirmation, candleScan, advancedSmc = buildAdvancedSmcContext([], market, zones, confirmation, candleScan)) {
   const h1Direction = getH1Direction(market);
   const h1Against = market.bias !== "WAIT" && h1Direction.bias !== "WAIT" && h1Direction.bias !== market.bias;
-  const score = clamp(scoreSetup(market, news, zones, confirmation, candleScan) - (h1Against ? 8 : 0), 0, 100);
   const coreValid = market.valid && news.valid && zones.valid && confirmation.valid && candleScan.valid;
   const direction = coreValid ? market.bias : "WAIT";
-  const setup = buildSetup(direction, zones, confirmation);
+  const setup = buildSetup(direction, zones, confirmation, advancedSmc);
   const riskReward = setup.riskReward;
+  const score = clamp(scoreSmartMoneySetup(market, zones, confirmation, candleScan, riskReward, h1Direction, advancedSmc) - (h1Against ? 8 : 0), 0, 100);
   const finalValidation = coreValid
-    ? getFinalSignalValidation({ mode: "smart", direction, setup, market, news, zones, confirmation, candleScan, riskReward, score, scoreMinimum: state.scoreMinimums.smart, h1Direction })
+    ? getFinalSignalValidation({ mode: "smart", direction, setup, market, news, zones, confirmation, candleScan, riskReward, score, scoreMinimum: state.scoreMinimums.smart, h1Direction, advancedSmc })
     : buildValidationFailure("Setup incomplet", getMissingReason(market, news, zones, confirmation, candleScan), "en attente");
   const rrBlocked = coreValid && !riskReward.valid;
   const valid = finalValidation.valid;
-  const scoreLabel = score >= 85 ? "setup fort" : score >= 70 ? "signal possible" : score >= 50 ? "attente" : "pas de trade";
+  const scoreLabel = score >= 90 ? "signal fort" : score >= 80 ? "bon signal" : score >= 70 ? "signal possible" : score >= 50 ? "attente" : "pas de trade";
   const status = valid ? direction : finalValidation.statusKind === "refusé" ? "SIGNAL REFUSÉ" : finalValidation.setupState === "Aucun trade qualifié" ? "AUCUN TRADE" : "ATTENTE";
 
   return {
@@ -2403,12 +2529,17 @@ function buildSmartMoneyAnalysis(session, market, news, zones, confirmation, can
     h1Direction: h1Direction.label,
     signalLifecycleStatus: valid ? "actif" : finalValidation.statusKind,
     blockingReason: valid ? "Aucun" : finalValidation.blockingReason,
-    confirmationSummary: confirmation.reason,
+    confirmationSummary: `${confirmation.reason} | ${advancedSmc.summary}`,
     reason: valid
       ? `${direction} confirmé: Entrée ${setup.entry}, SL ${setup.sl}, TP1 ${setup.tp1}, RR ${riskReward.display}. ${market.context}, ${zones.primary}, ${confirmation.reason}`
       : finalValidation.reason,
-    badges: buildSmartBadges(market, news, valid, candleScan, riskReward, rrBlocked),
+    badges: buildSmartBadges(market, news, valid, candleScan, riskReward, rrBlocked, advancedSmc),
     blocks: [
+      ["BOS displacement", advancedSmc.bosDisplacement, advancedSmc.bosDisplacement ? "valide" : "faible"],
+      ["FVG / Imbalance", advancedSmc.fvgPresent, advancedSmc.fvgPresent ? "present apres BOS" : "absent"],
+      ["Premium/Discount", advancedSmc.premiumDiscountAligned, advancedSmc.premiumDiscountLabel],
+      ["OTE 0.618-0.79", advancedSmc.oteTouched || advancedSmc.oteNear, `${advancedSmc.oteStatus} - 0.705 ${advancedSmc.ote705}`],
+      ["SL/TP structurels", Boolean(setup.structural), setup.structural ? `SL ${setup.sl} - TP1 ${setup.tp1} - TP2 ${setup.tp2} - TP3 ${setup.tp3}` : "Niveaux calcules par defaut"],
       ["Météo du marché", market.valid, market.context],
       ["Structure de marché", market.valid, market.bias === "BUY" ? "HH/HL + BOS haussier" : market.bias === "SELL" ? "LH/LL + BOS baissier" : "Structure neutre"],
       ["Liquidité", zones.valid, zones.reason],
@@ -2424,12 +2555,12 @@ function buildSmartMoneyAnalysis(session, market, news, zones, confirmation, can
   };
 }
 
-function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session, candleScan, candles = []) {
+function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirmation, session, candleScan, candles = [], advancedSmc = buildAdvancedSmcContext(candles, market, zones, confirmation, candleScan)) {
   const h1Direction = getH1Direction(market);
   const m15Direction = getM15Direction(market, zones);
   const h1Aligned = smartResult.direction !== "WAIT" && h1Direction.bias === smartResult.direction;
-  const h1OrderBlock = state.tick % 6 !== 1;
-  const m15Refinement = state.tick % 5 !== 3;
+  const h1OrderBlock = advancedSmc.htfZoneValid;
+  const m15Refinement = advancedSmc.m15Refinement;
   const trendline = state.tick % 4 !== 0;
   const fibonacci = state.tick % 3 !== 1;
   const rsiConfirmation = getRsiConfirmation(smartResult.direction, candles);
@@ -2438,6 +2569,11 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
   const crtAvailable = false;
   const crt = false;
   const advancedConfirmations = [
+    ["BOS displacement", advancedSmc.bosDisplacement, advancedSmc.bosDisplacement ? "valide" : "faible"],
+    ["FVG / Imbalance", advancedSmc.fvgPresent, advancedSmc.fvgPresent ? "present apres BOS" : "absent"],
+    ["Liquidite prise", advancedSmc.liquidityTaken, advancedSmc.liquidityTaken ? "oui" : "non"],
+    ["Premium/Discount", advancedSmc.premiumDiscountAligned, advancedSmc.premiumDiscountLabel],
+    ["OTE 0.705", advancedSmc.oteTouched || advancedSmc.oteNear, `${advancedSmc.oteStatus} - zone ${advancedSmc.oteRangeLabel}`],
     ["Trendline", trendline, trendline ? "cassure/respect validé" : "trendline non confirmée"],
     ["Fibonacci", fibonacci, fibonacci ? "réaction sur 61.8 %" : "zone Fibonacci non validée"],
     ["RSI", rsi, rsiConfirmation.label],
@@ -2448,15 +2584,21 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
   const advancedCount = advancedConfirmations.filter((item) => item[1]).length;
   const rrRefused = smartResult.status === "SIGNAL REFUSÉ";
   const h1Contrary = smartResult.direction !== "WAIT" && h1Direction.bias !== "WAIT" && h1Direction.bias !== smartResult.direction;
-  const mandatoryValid = smartResult.valid && h1Aligned && h1OrderBlock && m15Refinement;
-  const score = scoreGoldSetup(smartResult.score, h1Aligned, h1OrderBlock, m15Refinement, advancedCount, candleScan.quality);
+  const candidateSetup = smartResult.direction !== "WAIT" ? smartResult.setup : buildSetup("WAIT", zones, confirmation, advancedSmc);
+  const candidateRiskReward = smartResult.direction !== "WAIT" ? smartResult.riskReward : candidateSetup.riskReward;
+  const mandatoryValid = smartResult.valid && h1Aligned && h1OrderBlock && m15Refinement && advancedSmc.bosDisplacement && advancedSmc.fvgPresent && advancedSmc.liquidityTaken && advancedSmc.premiumDiscountAligned;
+  const score = scoreGoldIntelligenceSetup(h1Aligned, h1OrderBlock, m15Refinement, confirmation, candleScan, candidateRiskReward, advancedSmc);
   const missingAdvanced = advancedConfirmations.filter((item) => !item[1]).map((item) => item[0]);
   const confirmedAdvanced = advancedConfirmations.filter((item) => item[1]).map((item) => item[0]);
-  const candidateSetup = smartResult.direction !== "WAIT" ? smartResult.setup : buildSetup("WAIT", zones, confirmation);
-  const candidateRiskReward = smartResult.direction !== "WAIT" ? smartResult.riskReward : candidateSetup.riskReward;
+  const requiredSmcMissing = [
+    ["BOS displacement", advancedSmc.bosDisplacement],
+    ["FVG / Imbalance", advancedSmc.fvgPresent],
+    ["Liquidite prise", advancedSmc.liquidityTaken],
+    ["Premium/Discount", advancedSmc.premiumDiscountAligned],
+  ].filter((item) => !item[1]).map((item) => item[0]);
   const preFinalValid = mandatoryValid && advancedCount >= 2;
   const finalValidation = preFinalValid
-    ? getFinalSignalValidation({ mode: "gold", direction: smartResult.direction, setup: candidateSetup, market, news, zones, confirmation, candleScan, riskReward: candidateRiskReward, score, scoreMinimum: state.scoreMinimums.gold, h1Direction })
+    ? getFinalSignalValidation({ mode: "gold", direction: smartResult.direction, setup: candidateSetup, market, news, zones, confirmation, candleScan, riskReward: candidateRiskReward, score, scoreMinimum: state.scoreMinimums.gold, h1Direction, advancedSmc })
     : buildValidationFailure(h1Contrary || rrRefused ? "Signal refusé" : "Setup incomplet", h1Contrary ? "Signal refusé : contre tendance H1" : getGoldReason({
       smartResult,
       valid: false,
@@ -2468,6 +2610,7 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
       advancedCount,
       confirmedAdvanced,
       missingAdvanced,
+      requiredSmcMissing,
     }), h1Contrary || rrRefused ? "refusé" : "en attente");
   const valid = finalValidation.valid;
   const refused = rrRefused || h1Contrary || finalValidation.statusKind === "refusé";
@@ -2483,6 +2626,7 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
     advancedCount,
     confirmedAdvanced,
     missingAdvanced,
+    requiredSmcMissing,
   }) : finalValidation.reason;
 
   return {
@@ -2493,10 +2637,10 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
     status,
     setupState: valid ? "Setup premium" : finalValidation.setupState,
     score,
-    scoreLabel: score >= 90 ? "setup premium" : score >= 75 ? "setup avancé possible" : score >= 60 ? "attente" : "pas de trade",
+    scoreLabel: score >= 90 ? "setup premium" : score >= 80 ? "signal possible" : score >= 60 ? "attente" : "pas de trade",
     biasLabel: rrRefused ? "RR insuffisant" : h1Contrary ? "Contre tendance H1" : valid ? "Confluence forte" : "Attente avancée",
-    setup: valid || refused ? candidateSetup : buildSetup("WAIT", zones, confirmation),
-    riskReward: valid || refused ? candidateRiskReward : buildSetup("WAIT", zones, confirmation).riskReward,
+    setup: valid || refused ? candidateSetup : buildSetup("WAIT", zones, confirmation, advancedSmc),
+    riskReward: valid || refused ? candidateRiskReward : buildSetup("WAIT", zones, confirmation, advancedSmc).riskReward,
     timeframe: valid ? smartResult.timeframe : "H1 + M15",
     zone: h1OrderBlock ? `Order Block H1 ${smartResult.direction === "SELL" ? "bearish" : "bullish"}` : "Order Block H1 absent",
     liquidity: smartResult.liquidity,
@@ -2506,8 +2650,15 @@ function buildGoldIntelligenceAnalysis(smartResult, market, news, zones, confirm
     blockingReason: valid ? "Aucun" : reason,
     confirmationSummary: confirmedAdvanced.length ? confirmedAdvanced.join(", ") : "Aucune confirmation avancée",
     reason,
-    badges: buildGoldBadges(valid, refused, news, market, h1Aligned, advancedCount, candleScan, smartResult.riskReward, rrRefused),
+    badges: buildGoldBadges(valid, refused, news, market, h1Aligned, advancedCount, candleScan, candidateRiskReward, rrRefused, advancedSmc),
     blocks: [
+      ["BOS displacement", advancedSmc.bosDisplacement, advancedSmc.bosDisplacement ? "valide" : "faible"],
+      ["FVG / Imbalance", advancedSmc.fvgPresent, advancedSmc.fvgPresent ? "present apres BOS" : "absent"],
+      ["Liquidite avant impulsion", advancedSmc.liquidityTaken, advancedSmc.liquidityTaken ? "oui" : "non"],
+      ["Premium/Discount", advancedSmc.premiumDiscountAligned, advancedSmc.premiumDiscountLabel],
+      ["OTE 0.618-0.79", advancedSmc.oteTouched || advancedSmc.oteNear, `${advancedSmc.oteStatus} - 0.705 ${advancedSmc.ote705}`],
+      ["Bougie confirmation", confirmation.valid && candleScan.valid, candleScan.valid ? "forte" : "faible"],
+      ["SL/TP structurels", Boolean(candidateSetup.structural), candidateSetup.structural ? `SL ${candidateSetup.sl} - TP1 ${candidateSetup.tp1} - TP2 ${candidateSetup.tp2} - TP3 ${candidateSetup.tp3}` : "Niveaux calcules par defaut"],
       ["Mode 1 valide", smartResult.valid, smartResult.valid ? `${smartResult.status} Mode 1 confirmé` : smartResult.blockingReason],
       ["Risk/Reward minimum", !rrRefused && (!smartResult.riskReward || smartResult.riskReward.valid), smartResult.riskReward ? `${smartResult.riskReward.display} · ${smartResult.riskReward.classification} · minimum ${formatRiskRewardValue(state.riskRewardMinimum)}` : "En attente"],
       ["Direction H1 obligatoire", h1Aligned, h1Aligned ? h1Direction.label : `Tendance H1: ${h1Direction.label}`],
@@ -2531,12 +2682,13 @@ function scoreGoldSetup(smartScore, h1Aligned, h1OrderBlock, m15Refinement, adva
   return clamp(score, 0, 100);
 }
 
-function getGoldReason({ smartResult, valid, refused, h1Direction, h1Aligned, h1OrderBlock, m15Refinement, advancedCount, confirmedAdvanced, missingAdvanced }) {
+function getGoldReason({ smartResult, valid, refused, h1Direction, h1Aligned, h1OrderBlock, m15Refinement, advancedCount, confirmedAdvanced, missingAdvanced, requiredSmcMissing = [] }) {
   if (smartResult.status === "SIGNAL REFUSÉ") return smartResult.blockingReason;
   if (!smartResult.valid) return `Mode 1 non valide: ${smartResult.blockingReason}`;
   if (refused || !h1Aligned) return `Signal refusé: ${smartResult.status} contre tendance H1 ${h1Direction.label}`;
   if (!h1OrderBlock) return `Mode 1 ${smartResult.status} valide, mais Mode 2 en attente: Order Block H1 obligatoire absent`;
   if (!m15Refinement) return `Mode 1 ${smartResult.status} valide, mais Mode 2 en attente: pas de raffinement M15`;
+  if (requiredSmcMissing.length) return `Mode 2 en attente: criteres SMC requis manquants (${requiredSmcMissing.join(", ")})`;
   if (advancedCount < 2) return `Mode 2 en attente: confirmations avancées insuffisantes (${missingAdvanced.join(", ")})`;
   if (valid) return `${smartResult.status} confirmé: H1 aligné + OB H1 + raffinement M15 + ${confirmedAdvanced.join(" + ")}`;
   return "Mode 2 en attente";
@@ -2591,18 +2743,22 @@ function oppositeDirection(direction) {
   return direction === "BUY" ? "SELL" : direction === "SELL" ? "BUY" : "WAIT";
 }
 
-function buildSmartBadges(market, news, valid, candleScan, riskReward, rrBlocked) {
+function buildSmartBadges(market, news, valid, candleScan, riskReward, rrBlocked, advancedSmc = null) {
   const badges = [];
   badges.push(valid ? ["Validé", "valid"] : rrBlocked ? ["RR insuffisant", "refused"] : ["En attente", "pending"]);
   if (!news.valid) badges.push(["Risque news", "risk"]);
   if (market.context.includes("range")) badges.push(["Range dangereux", "risk"]);
   if (market.valid) badges.push(["Tendance alignée", "valid"]);
   if (riskReward?.display && riskReward.display !== "--") badges.push([`RR ${riskReward.display}`, riskReward.valid ? "valid" : "risk"]);
+  if (advancedSmc) {
+    badges.push([advancedSmc.bosDisplacement ? "BOS displacement" : "BOS faible", advancedSmc.bosDisplacement ? "valid" : "risk"]);
+    badges.push([`OTE ${advancedSmc.oteStatus}`, advancedSmc.oteTouched || advancedSmc.oteNear ? "valid" : "pending"]);
+  }
   badges.push(candleScan.valid ? [`Candle ${candleScan.quality}`, "valid"] : ["Bougie faible", "risk"]);
   return badges;
 }
 
-function buildGoldBadges(valid, refused, news, market, h1Aligned, advancedCount, candleScan, riskReward, rrBlocked) {
+function buildGoldBadges(valid, refused, news, market, h1Aligned, advancedCount, candleScan, riskReward, rrBlocked, advancedSmc = null) {
   const badges = [];
   badges.push(valid ? ["Validé", "valid"] : refused ? ["Refusé", "refused"] : ["En attente", "pending"]);
   if (!news.valid) badges.push(["Risque news", "risk"]);
@@ -2610,13 +2766,18 @@ function buildGoldBadges(valid, refused, news, market, h1Aligned, advancedCount,
   badges.push(h1Aligned ? ["Tendance alignée", "valid"] : ["Tendance contraire", "refused"]);
   if (advancedCount >= 2) badges.push(["Confluence forte", "valid"]);
   if (riskReward?.display && riskReward.display !== "--") badges.push([rrBlocked ? "RR insuffisant" : `RR ${riskReward.display}`, riskReward.valid ? "valid" : "risk"]);
+  if (advancedSmc?.premiumDiscountAligned) badges.push(["Premium/Discount", "valid"]);
+  if (advancedSmc?.oteTouched || advancedSmc?.oteNear) badges.push(["OTE 0.705", "valid"]);
   badges.push(candleScan.quality >= 81 ? ["Bougie premium", "valid"] : candleScan.valid ? ["Bougie forte", "valid"] : ["Bougie faible", "risk"]);
   return badges;
 }
 
-function buildSetup(direction, zones, confirmation) {
+function buildSetup(direction, zones, confirmation, advancedSmc = null) {
   if (direction === "WAIT") {
     return attachRiskReward({ entry: "--", sl: "--", tp1: "--", tp2: "--", tp3: "--", zone: zones.primary }, direction);
+  }
+  if (advancedSmc?.structuralSetup) {
+    return attachRiskReward({ ...advancedSmc.structuralSetup, zone: zones.primary }, direction);
   }
 
   const drift = Math.sin(state.tick / 3) * 4.2;
