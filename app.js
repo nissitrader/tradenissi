@@ -1177,6 +1177,81 @@ function drawReplayChart(candles, context, activeResult, entryProjection) {
   renderSelectedZoneInfo();
 }
 
+function drawLiveTsrOverlay(candles, context, activeResult, entryProjection) {
+  const canvas = elements.replayCanvas;
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height || !candles.length) {
+    clearTsrOverlayCanvas();
+    return;
+  }
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.floor(rect.width * ratio));
+  canvas.height = Math.max(1, Math.floor(rect.height * ratio));
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, rect.width, rect.height);
+
+  const visible = candles.slice(-PRICE_SCALE_VISIBLE_CANDLES);
+  const visibleStartIndex = candles.length - visible.length;
+  const scale = buildVisiblePriceScale(visible, candles, visibleStartIndex);
+  const { max, min } = scale;
+  const priceRange = Math.max(0.0001, max - min);
+  const topPadding = 26;
+  const bottomPadding = 34;
+  const leftPadding = 18;
+  const rightPadding = 92;
+  const plotWidth = Math.max(120, rect.width - leftPadding - rightPadding);
+  const priceToY = (price) => ((max - price) / priceRange) * (rect.height - topPadding - bottomPadding) + topPadding;
+  const candleWidth = Math.max(5, plotWidth / visible.length);
+  const candleToX = (absoluteIndex) => {
+    const localIndex = clamp(absoluteIndex - visibleStartIndex, 0, visible.length - 1);
+    return leftPadding + localIndex * candleWidth + candleWidth / 2;
+  };
+  const geometry = {
+    visible,
+    visibleStartIndex,
+    priceToY,
+    candleToX,
+    leftPadding,
+    rightPadding,
+    topPadding,
+    bottomPadding,
+    candleWidth,
+    plotWidth,
+    plotRight: leftPadding + plotWidth,
+    rect,
+    scale,
+    clampPriceY: (price) => clamp(priceToY(price), topPadding, rect.height - bottomPadding),
+    isPriceNearView: (price) => Number.isFinite(price) && price >= scale.discreetMin && price <= scale.discreetMax,
+    isPriceVisible: (price) => Number.isFinite(price) && price >= min && price <= max,
+  };
+
+  state.lastChartRender = { candles, context, activeResult, entryProjection, liveOverlay: true };
+  const topDownAnalysis = getTopDownAnalysisForRender(candles, context, activeResult, entryProjection);
+  state.topDownZones = topDownAnalysis.zones;
+  if (state.selectedZone) state.selectedZone = state.topDownZones.find((zone) => zone.id === state.selectedZone.id) || null;
+  state.chartZoneHitboxes = [];
+
+  drawClassicIndicators(ctx, geometry, candles);
+  drawReplayOverlays(ctx, rect, context, activeResult, geometry, entryProjection, topDownAnalysis);
+  renderSelectedZoneInfo();
+}
+
+function clearTsrOverlayCanvas() {
+  const canvas = elements.replayCanvas;
+  const rect = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.floor((rect.width || 1) * ratio));
+  canvas.height = Math.max(1, Math.floor((rect.height || 1) * ratio));
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, rect.width || 1, rect.height || 1);
+  state.chartZoneHitboxes = [];
+  state.topDownZones = [];
+  state.selectedZone = null;
+  renderSelectedZoneInfo();
+}
+
 function drawReplayMessage(message) {
   const canvas = elements.replayCanvas;
   const rect = canvas.getBoundingClientRect();
@@ -1303,7 +1378,13 @@ function scheduleTopDownAnalysis(cacheKey, candles, context, activeResult, entry
 
     const latest = state.lastChartRender;
     if (latest && getTopDownCacheKey(latest.candles, latest.context) === cacheKey) {
-      window.requestAnimationFrame(() => drawReplayChart(latest.candles, latest.context, latest.activeResult, latest.entryProjection));
+      window.requestAnimationFrame(() => {
+        if (latest.liveOverlay && !state.replay.active) {
+          drawLiveTsrOverlay(latest.candles, latest.context, latest.activeResult, latest.entryProjection);
+        } else {
+          drawReplayChart(latest.candles, latest.context, latest.activeResult, latest.entryProjection);
+        }
+      });
     }
   }, 0);
 }
@@ -2505,18 +2586,18 @@ function getLivePrecisionCandles() {
 function renderLivePrecisionChart(candles, context, activeResult, entryProjection) {
   if (state.replay.active) return;
   elements.chartFrame.classList.remove("tv-fallback-active");
+  ensureTradingViewInterval();
   if (!candles.length) {
-    elements.chartFrame.classList.add("tv-fallback-active");
-    ensureTradingViewInterval();
-    drawReplayMessage("Aucune bougie live TSR disponible.");
+    clearTsrOverlayCanvas();
     return;
   }
-  drawReplayChart(candles, context, activeResult, entryProjection);
+  drawLiveTsrOverlay(candles, context, activeResult, entryProjection);
 }
 
 function renderNoLiveCandlesState(session, market, news, zones) {
   elements.chartFrame.classList.add("tv-fallback-active");
   ensureTradingViewInterval();
+  clearTsrOverlayCanvas();
   const candleScan = buildEmptyCandleScan();
   const confirmation = {
     valid: false,
