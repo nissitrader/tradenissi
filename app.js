@@ -174,6 +174,7 @@ const elements = {
   scoreFill: document.getElementById("scoreFill"),
   scoreValue: document.getElementById("scoreValue"),
   compareResults: document.getElementById("compareResults"),
+  tsrAnalysisList: document.getElementById("tsrAnalysisList"),
   entryPrice: document.getElementById("entryPrice"),
   stopLoss: document.getElementById("stopLoss"),
   tp1: document.getElementById("tp1"),
@@ -1142,6 +1143,7 @@ function drawReplayChart(candles, context, activeResult, entryProjection) {
   state.topDownZones = topDownAnalysis.zones;
   if (state.selectedZone) state.selectedZone = state.topDownZones.find((zone) => zone.id === state.selectedZone.id) || null;
   state.chartZoneHitboxes = [];
+  renderTsrAnalysisPanel(topDownAnalysis);
 
   drawReplayGrid(ctx, rect);
   drawClassicIndicators(ctx, geometry, candles);
@@ -1231,6 +1233,7 @@ function drawLiveTsrOverlay(candles, context, activeResult, entryProjection) {
   state.topDownZones = topDownAnalysis.zones;
   if (state.selectedZone) state.selectedZone = state.topDownZones.find((zone) => zone.id === state.selectedZone.id) || null;
   state.chartZoneHitboxes = [];
+  renderTsrAnalysisPanel(topDownAnalysis);
 
   drawClassicIndicators(ctx, geometry, candles);
   drawReplayOverlays(ctx, rect, context, activeResult, geometry, entryProjection, topDownAnalysis);
@@ -1249,6 +1252,7 @@ function clearTsrOverlayCanvas() {
   state.chartZoneHitboxes = [];
   state.topDownZones = [];
   state.selectedZone = null;
+  renderTsrAnalysisPanel({ zones: [] });
   renderSelectedZoneInfo();
 }
 
@@ -1849,13 +1853,14 @@ function drawReplayOverlays(ctx, rect, context, activeResult, geometry, entryPro
 
 function drawTopDownZones(ctx, rect, geometry, zones) {
   state.chartZoneHitboxes = [];
+  const primaryZone = getPrimaryChartZone(zones);
   zones.forEach((zone) => {
-    if (!shouldDrawTopDownZone(zone)) return;
+    if (!shouldDrawTopDownZone(zone, primaryZone)) return;
     drawTopDownZone(ctx, rect, geometry, zone);
   });
 }
 
-function shouldDrawTopDownZone(zone) {
+function shouldDrawTopDownZone(zone, primaryZone = null) {
   const visible = state.smartMoneyVisibility;
   const typeVisible = zone.type === "OB"
     ? visible.orderBlocks
@@ -1865,12 +1870,24 @@ function shouldDrawTopDownZone(zone) {
         ? visible.ote || visible.premiumDiscount
         : visible.equalHigh || visible.equalLow || visible.liquiditySweep || visible.previousHL;
   if (!typeVisible) return false;
-  if (zone.status === "zone future") return Boolean(visible.futureZones || visible.entryZones);
-  if (zone.status === "entrée potentielle") return Boolean(visible.potentialEntries);
+  const selected = state.selectedZone?.id === zone.id;
+  const primary = primaryZone?.id === zone.id;
+  if (selected) return true;
+  if (zone.status === "zone future") return primary && Boolean(visible.futureZones || visible.entryZones);
+  if (zone.status === "entrée potentielle") return primary && Boolean(visible.potentialEntries);
   if (zone.status === "entrée imminente") return Boolean(visible.imminentEntries);
   if (zone.status === "signal confirmé") return Boolean(visible.confirmedSignals);
-  if (zone.status === "invalidée") return Boolean(visible.futureZones);
+  if (zone.status === "invalidée") return false;
   return true;
+}
+
+function getPrimaryChartZone(zones) {
+  return zones
+    .filter((zone) => zone.status === "entrée imminente" || zone.status === "entrée potentielle" || zone.status === "signal confirmé")
+    .sort((a, b) => {
+      const rank = { "signal confirmé": 3, "entrée imminente": 2, "entrée potentielle": 1 };
+      return (rank[b.status] || 0) - (rank[a.status] || 0) || b.score - a.score;
+    })[0] || null;
 }
 
 function drawTopDownZone(ctx, rect, geometry, zone) {
@@ -3807,6 +3824,68 @@ function renderStrategyOverlay(direction, zones, confirmation, entryProjection) 
 
 function clearStrategyOverlay() {
   elements.strategyOverlay.innerHTML = "";
+}
+
+function renderTsrAnalysisPanel(topDownAnalysis = { zones: [] }) {
+  const zones = topDownAnalysis.zones || [];
+  if (!elements.tsrAnalysisList) return;
+  if (!zones.length) {
+    elements.tsrAnalysisList.innerHTML = `<p class="empty-analysis">Analyse TSR en attente de bougies.</p>`;
+    return;
+  }
+
+  const groups = [
+    ["Order Blocks détectés", (zone) => zone.type === "OB"],
+    ["FVG détectés", (zone) => zone.type === "FVG"],
+    ["BOS / ChoCH", (zone) => zone.status === "signal confirmé" || zone.status === "entrée imminente"],
+    ["OTE 0.705", (zone) => zone.type === "OTE"],
+    ["Premium / Discount", (zone) => zone.type === "OTE" || zone.source === "premium / discount"],
+    ["Liquidité", (zone) => zone.type === "Liquidite"],
+    ["Zones futures", (zone) => zone.status === "zone future"],
+    ["Entrées potentielles", (zone) => zone.status === "entrée potentielle" || zone.status === "entrée imminente"],
+  ];
+
+  elements.tsrAnalysisList.innerHTML = groups
+    .map(([title, predicate]) => {
+      const items = zones.filter(predicate).slice(0, 5);
+      if (!items.length) return "";
+      return `
+        <article class="tsr-analysis-group">
+          <h3>${title}</h3>
+          ${items.map(renderTsrAnalysisZoneButton).join("")}
+        </article>
+      `;
+    })
+    .join("") || `<p class="empty-analysis">Aucune zone qualifiée pour le moment.</p>`;
+
+  elements.tsrAnalysisList.querySelectorAll("[data-zone-id]").forEach((button) => {
+    button.addEventListener("click", () => selectTsrAnalysisZone(button.dataset.zoneId));
+  });
+}
+
+function renderTsrAnalysisZoneButton(zone) {
+  const selected = state.selectedZone?.id === zone.id ? " selected" : "";
+  return `
+    <button type="button" class="tsr-zone-row${selected}" data-zone-id="${zone.id}">
+      <span>${zone.label}</span>
+      <strong>${zone.status}</strong>
+      <small>${zone.reason}</small>
+      <em>Score ${zone.score}/100 · ${zone.entry} / SL ${zone.sl}</em>
+    </button>
+  `;
+}
+
+function selectTsrAnalysisZone(zoneId) {
+  state.selectedZone = state.topDownZones.find((zone) => zone.id === zoneId) || null;
+  renderSelectedZoneInfo();
+  renderTsrAnalysisPanel({ zones: state.topDownZones });
+  const latest = state.lastChartRender;
+  if (!latest) return;
+  if (latest.liveOverlay && !state.replay.active) {
+    drawLiveTsrOverlay(latest.candles, latest.context, latest.activeResult, latest.entryProjection);
+  } else {
+    drawReplayChart(latest.candles, latest.context, latest.activeResult, latest.entryProjection);
+  }
 }
 
 function handleChartZoneClick(event) {

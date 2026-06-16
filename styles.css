@@ -976,6 +976,69 @@ button:active {
   color: var(--muted);
 }
 
+.tsr-analysis-panel {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.tsr-analysis-list {
+  display: grid;
+  gap: 10px;
+}
+
+.tsr-analysis-group {
+  display: grid;
+  gap: 6px;
+}
+
+.tsr-analysis-group h3 {
+  margin: 0;
+  color: var(--gold);
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.tsr-zone-row {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  min-height: 58px;
+  padding: 8px;
+  border: 1px solid rgba(238, 232, 207, 0.13);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text);
+  text-align: left;
+}
+
+.tsr-zone-row:hover,
+.tsr-zone-row.selected {
+  border-color: rgba(231, 184, 78, 0.62);
+  background: rgba(231, 184, 78, 0.08);
+}
+
+.tsr-zone-row span {
+  color: #f8f1dc;
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.tsr-zone-row strong {
+  color: var(--teal);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
+.tsr-zone-row small,
+.tsr-zone-row em,
+.empty-analysis {
+  color: var(--muted);
+  font-size: 0.69rem;
+  font-style: normal;
+  line-height: 1.35;
+}
+
 .overlay-ob {
   border-color: rgba(231, 184, 78, 0.7);
   background: rgba(231, 184, 78, 0.16);
