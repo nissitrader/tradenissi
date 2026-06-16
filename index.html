@@ -136,6 +136,11 @@
             <input id="chartScale" type="range" min="48" max="76" value="61" />
           </label>
 
+          <label class="check-row scale-fit-row">
+            <input id="autoFitVisibleCandles" type="checkbox" checked />
+            <span>Auto-fit bougies visibles</span>
+          </label>
+
           <section class="risk-reward-control" aria-label="Filtre Risk Reward">
             <label>
               <span>RR Minimum</span>
@@ -180,6 +185,7 @@
               <small id="chartInterval">H4</small>
             </div>
             <div class="toolbar-actions">
+              <button type="button" class="recenter-price-button" id="recenterPrice" title="Recentrer prix" aria-label="Recentrer prix">Prix</button>
               <button type="button" id="refreshWidget" title="Rafraichir le graphique" aria-label="Rafraichir le graphique">↻</button>
               <button type="button" id="fullscreenChart" title="Agrandir le graphique" aria-label="Agrandir le graphique">⛶</button>
               <button type="button" class="reset-position-button" id="resetSignalPositions" title="Réinitialiser position" aria-label="Réinitialiser position">

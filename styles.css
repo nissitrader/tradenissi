@@ -450,6 +450,12 @@ button:active {
   accent-color: var(--teal);
 }
 
+.scale-fit-row {
+  margin: 8px 0 12px;
+  border-color: rgba(59, 216, 189, 0.3);
+  background: rgba(59, 216, 189, 0.055);
+}
+
 .chart-desk {
   display: grid;
   grid-template-rows: auto 1fr auto;
@@ -511,6 +517,17 @@ button:active {
   min-width: 0;
   padding: 0 10px;
   color: var(--gold);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.toolbar-actions .recenter-price-button {
+  width: auto;
+  min-width: 54px;
+  padding: 0 10px;
+  color: var(--teal);
   font-size: 0.72rem;
   font-weight: 800;
   text-transform: uppercase;

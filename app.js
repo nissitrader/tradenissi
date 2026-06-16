@@ -36,15 +36,20 @@ const API_UNAVAILABLE_MESSAGE = "API locale indisponible — vérifiez que votre
 const DRAG_STORAGE_KEY = "tsr-draggable-signal-card-positions";
 const RISK_REWARD_STORAGE_KEY = "tsr-risk-reward-minimum";
 const SCORE_FILTER_STORAGE_KEY = "tsr-score-filter-minimums";
+const PRICE_AUTO_FIT_STORAGE_KEY = "tsr-price-auto-fit-visible-candles";
 const RISK_REWARD_DEFAULT_MINIMUM = 1.2;
 const SMART_SCORE_DEFAULT_MINIMUM = 70;
 const GOLD_SCORE_DEFAULT_MINIMUM = 80;
+const PRICE_SCALE_VISIBLE_CANDLES = 72;
+const PRICE_SCALE_MARGIN_RATIO = 0.12;
 
 const state = {
   interval: "240",
   intervalLabel: "H4",
   analysisMode: "smart",
   showBothAnalyses: false,
+  autoFitVisibleCandles: true,
+  forceRecentPriceCenter: 0,
   riskRewardMinimum: RISK_REWARD_DEFAULT_MINIMUM,
   scoreMinimums: {
     smart: SMART_SCORE_DEFAULT_MINIMUM,
@@ -104,6 +109,8 @@ const elements = {
   chartDecisionFill: document.getElementById("chartDecisionFill"),
   chartDecisionScore: document.getElementById("chartDecisionScore"),
   resetSignalPositions: document.getElementById("resetSignalPositions"),
+  recenterPrice: document.getElementById("recenterPrice"),
+  autoFitVisibleCandles: document.getElementById("autoFitVisibleCandles"),
   riskRewardMinimum: document.getElementById("riskRewardMinimum"),
   smartScoreMinimum: document.getElementById("smartScoreMinimum"),
   goldScoreMinimum: document.getElementById("goldScoreMinimum"),
@@ -166,6 +173,7 @@ function boot() {
   initReplayDefaults();
   initRiskRewardMinimum();
   initScoreMinimums();
+  initPriceAutoFit();
   renderOverlayControls();
   bindInteractions();
   initDraggableSignalCards();
@@ -262,6 +270,7 @@ function bindInteractions() {
       button.classList.add("active");
       state.interval = button.dataset.interval;
       state.intervalLabel = button.textContent.trim();
+      state.forceRecentPriceCenter += 1;
       elements.chartInterval.textContent = state.intervalLabel;
       ensureTradingViewInterval();
       evaluateAndRender();
@@ -297,6 +306,7 @@ function bindInteractions() {
     state.replay.timeframe = elements.replayTimeframe.value;
     state.interval = state.replay.timeframe;
     state.intervalLabel = getReplayTimeframeLabel(state.replay.timeframe);
+    state.forceRecentPriceCenter += 1;
     elements.chartInterval.textContent = state.intervalLabel;
     resetReplaySession();
   });
@@ -324,6 +334,21 @@ function bindInteractions() {
 
   document.getElementById("chartScale").addEventListener("input", (event) => {
     elements.workspace.style.gridTemplateColumns = `var(--left-width) ${event.target.value}fr var(--right-width)`;
+  });
+
+  elements.recenterPrice.addEventListener("click", () => {
+    state.forceRecentPriceCenter += 1;
+    state.autoFitVisibleCandles = true;
+    elements.autoFitVisibleCandles.checked = true;
+    writePriceAutoFit();
+    evaluateAndRender();
+  });
+
+  elements.autoFitVisibleCandles.addEventListener("change", () => {
+    state.autoFitVisibleCandles = elements.autoFitVisibleCandles.checked;
+    state.forceRecentPriceCenter += 1;
+    writePriceAutoFit();
+    evaluateAndRender();
   });
 
   document.getElementById("toggleControls").addEventListener("click", () => {
@@ -396,6 +421,24 @@ function writeScoreMinimums() {
     localStorage.setItem(SCORE_FILTER_STORAGE_KEY, JSON.stringify(state.scoreMinimums));
   } catch {
     // Score filters still apply in the current session if storage is blocked.
+  }
+}
+
+function initPriceAutoFit() {
+  try {
+    const saved = localStorage.getItem(PRICE_AUTO_FIT_STORAGE_KEY);
+    state.autoFitVisibleCandles = saved === null ? true : saved === "true";
+  } catch {
+    state.autoFitVisibleCandles = true;
+  }
+  elements.autoFitVisibleCandles.checked = state.autoFitVisibleCandles;
+}
+
+function writePriceAutoFit() {
+  try {
+    localStorage.setItem(PRICE_AUTO_FIT_STORAGE_KEY, String(state.autoFitVisibleCandles));
+  } catch {
+    // Auto-fit still applies in the current session if storage is blocked.
   }
 }
 
@@ -976,14 +1019,10 @@ function drawReplayChart(candles, context, activeResult, entryProjection) {
   ctx.fillStyle = "#090a08";
   ctx.fillRect(0, 0, rect.width, rect.height);
 
-  const visible = candles.slice(-72);
+  const visible = candles.slice(-PRICE_SCALE_VISIBLE_CANDLES);
   const visibleStartIndex = candles.length - visible.length;
-  const indicatorPrices = getVisibleClassicPriceValues(candles, visibleStartIndex);
-  const high = Math.max(...visible.map((candle) => candle.high), ...indicatorPrices);
-  const low = Math.min(...visible.map((candle) => candle.low), ...indicatorPrices);
-  const padding = Math.max(2, (high - low) * 0.12);
-  const max = high + padding;
-  const min = low - padding;
+  const scale = buildVisiblePriceScale(visible, candles, visibleStartIndex);
+  const { max, min } = scale;
   const priceRange = Math.max(0.0001, max - min);
   const topPadding = 26;
   const bottomPadding = 34;
@@ -1009,6 +1048,10 @@ function drawReplayChart(candles, context, activeResult, entryProjection) {
     plotWidth,
     plotRight: leftPadding + plotWidth,
     rect,
+    scale,
+    clampPriceY: (price) => clamp(priceToY(price), topPadding, rect.height - bottomPadding),
+    isPriceNearView: (price) => Number.isFinite(price) && price >= scale.discreetMin && price <= scale.discreetMax,
+    isPriceVisible: (price) => Number.isFinite(price) && price >= min && price <= max,
   };
 
   drawReplayGrid(ctx, rect);
@@ -1074,6 +1117,31 @@ function drawReplayGrid(ctx, rect) {
     ctx.lineTo(rect.width, y);
     ctx.stroke();
   }
+}
+
+function buildVisiblePriceScale(visibleCandles, allCandles, visibleStartIndex) {
+  const visibleHighs = visibleCandles.map((candle) => candle.high).filter(Number.isFinite);
+  const visibleLows = visibleCandles.map((candle) => candle.low).filter(Number.isFinite);
+  const indicatorPrices = state.autoFitVisibleCandles ? [] : getVisibleClassicPriceValues(allCandles, visibleStartIndex);
+  const high = Math.max(...visibleHighs, ...indicatorPrices);
+  const low = Math.min(...visibleLows, ...indicatorPrices);
+  const lastClose = visibleCandles[visibleCandles.length - 1]?.close;
+  const fallbackCenter = Number.isFinite(lastClose) ? lastClose : state.basePrice;
+  const rawRange = Number.isFinite(high - low) && high > low ? high - low : Math.max(2, fallbackCenter * 0.0008);
+  const center = Number.isFinite(high) && Number.isFinite(low) ? (high + low) / 2 : fallbackCenter;
+  const padding = Math.max(0.8, rawRange * PRICE_SCALE_MARGIN_RATIO);
+  const min = center - rawRange / 2 - padding;
+  const max = center + rawRange / 2 + padding;
+  const extended = Math.max(1.2, (max - min) * 0.35);
+
+  return {
+    min,
+    max,
+    rawHigh: high,
+    rawLow: low,
+    discreetMin: min - extended,
+    discreetMax: max + extended,
+  };
 }
 
 function getVisibleClassicPriceValues(candles, visibleStartIndex) {
@@ -1352,13 +1420,16 @@ function getReplayFvgZone(candles, direction, visibleStartIndex) {
 
 function drawPriceTimeZone(ctx, zone, geometry, options) {
   if (!zone) return;
-  const { priceToY, candleToX, candleWidth, plotRight } = geometry;
+  const { priceToY, candleToX, candleWidth, plotRight, clampPriceY, isPriceNearView } = geometry;
+  const topNear = isPriceNearView(zone.top);
+  const bottomNear = isPriceNearView(zone.bottom);
+  if (!topNear && !bottomNear) return;
   const left = candleToX(zone.startIndex) - candleWidth * 0.45;
   const right = Math.min(plotRight, candleToX(zone.endIndex) + candleWidth * 0.45);
-  const top = priceToY(zone.top);
-  const bottom = priceToY(zone.bottom);
+  const top = clampPriceY(zone.top);
+  const bottom = clampPriceY(zone.bottom);
   const y = Math.min(top, bottom);
-  const height = Math.max(10, Math.abs(bottom - top));
+  const height = Math.min(180, Math.max(10, Math.abs(bottom - top)));
   const width = Math.max(24, right - left);
 
   ctx.fillStyle = options.fill;
@@ -1386,36 +1457,46 @@ function drawAnchoredSegment(ctx, x1, y1, x2, y2, color, label) {
 function drawReplayEntryProjection(ctx, rect, projection, geometry) {
   if (!projection || projection.direction === "WAIT") return;
   const visible = state.smartMoneyVisibility;
-  const { priceToY, candleToX, visibleStartIndex } = geometry;
+  const { priceToY, candleToX, visibleStartIndex, clampPriceY, isPriceNearView } = geometry;
   const isBuy = projection.direction === "BUY";
   const color = isBuy ? "#46d17b" : "#ef6262";
   const entry = parsePrice(projection.setup.entry);
   const sl = parsePrice(projection.setup.sl);
   const tp1 = parsePrice(projection.setup.tp1);
-  const zoneY = Number.isFinite(entry) ? priceToY(entry) : isBuy ? rect.height * 0.58 : rect.height * 0.28;
-  const zoneTop = Number.isFinite(sl) ? Math.min(zoneY, priceToY(sl)) : zoneY;
-  const zoneHeight = Number.isFinite(sl) ? Math.max(32, Math.abs(priceToY(sl) - zoneY)) : 48;
+  const entryNear = isPriceNearView(entry);
+  const slNear = isPriceNearView(sl);
+  const tp1Near = isPriceNearView(tp1);
+  const zoneY = entryNear ? clampPriceY(entry) : isBuy ? rect.height * 0.58 : rect.height * 0.28;
+  const slY = slNear ? clampPriceY(sl) : zoneY + (isBuy ? 44 : -44);
+  const zoneTop = Number.isFinite(sl) ? Math.min(zoneY, slY) : zoneY;
+  const zoneHeight = Number.isFinite(sl) ? Math.min(160, Math.max(32, Math.abs(slY - zoneY))) : 48;
   const zoneLeft = candleToX(visibleStartIndex + Math.max(6, geometry.visible.length - 18));
   const zoneWidth = Math.max(90, rect.width - zoneLeft - 112);
   const stageRank = { future: 1, potential: 2, imminent: 3, confirmed: 4 }[projection.stage] || 0;
+  const projectionNearView = !Number.isFinite(entry) || entryNear || slNear || tp1Near;
+  if (!projectionNearView) {
+    drawReplayLabel(ctx, zoneLeft, isBuy ? rect.height - 62 : 34, `${projection.direction} hors echelle visible`, color);
+    return;
+  }
 
   if ((visible.entryZones || visible.futureZones) && visible.futureZones && stageRank >= 1) {
     ctx.fillStyle = isBuy ? "rgba(70, 209, 123, 0.08)" : "rgba(239, 98, 98, 0.08)";
     ctx.strokeStyle = isBuy ? "rgba(70, 209, 123, 0.34)" : "rgba(239, 98, 98, 0.34)";
     ctx.strokeRect(zoneLeft, zoneTop, zoneWidth, zoneHeight);
     ctx.fillRect(zoneLeft, zoneTop, zoneWidth, zoneHeight);
-    drawReplayLabel(ctx, zoneLeft + 8, zoneTop - 28, `Zone potentielle ${projection.direction}`, color);
+    drawReplayLabel(ctx, zoneLeft + 8, clamp(zoneTop - 28, 28, rect.height - 64), `Zone potentielle ${projection.direction}`, color);
   }
   if (visible.potentialEntries && stageRank >= 2) drawReplayLabel(ctx, zoneLeft + 8, zoneTop + zoneHeight + 8, "Entrée potentielle — attendre réaction", "#e7b84e");
   if (visible.imminentEntries && stageRank >= 3) drawReplayLabel(ctx, zoneLeft + 8, zoneTop + zoneHeight + 38, "Entrée imminente — prépare-toi", color);
   if (visible.confirmedSignals && stageRank >= 4) drawReplayLabel(ctx, zoneLeft + 8, Number.isFinite(tp1) ? priceToY(tp1) - 24 : zoneTop + zoneHeight + 68, `${projection.direction} confirmé`, color);
 
   const showPositionTool = stageRank >= 4 && ((isBuy && visible.longPositionTool) || (!isBuy && visible.shortPositionTool));
-  if (showPositionTool) drawReplayPositionTool(ctx, rect, projection, priceToY, color);
+  if (showPositionTool) drawReplayPositionTool(ctx, rect, projection, geometry, color);
 }
 
-function drawReplayPositionTool(ctx, rect, projection, priceToY, color) {
+function drawReplayPositionTool(ctx, rect, projection, geometry, color) {
   const visible = state.smartMoneyVisibility;
+  const { priceToY, clampPriceY, isPriceNearView } = geometry;
   const setup = projection.setup;
   const entry = parsePrice(setup.entry);
   const sl = parsePrice(setup.sl);
@@ -1438,29 +1519,35 @@ function drawReplayPositionTool(ctx, rect, projection, priceToY, color) {
 }
 
 function drawReplayLine(ctx, y, color, label, rect) {
+  if (!Number.isFinite(y) || y < -20 || y > rect.height + 20) return;
+  const safeY = clamp(y, 26, rect.height - 34);
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
   ctx.lineWidth = 1.2;
   ctx.beginPath();
-  ctx.moveTo(8, y);
-  ctx.lineTo(rect.width - 10, y);
+  ctx.moveTo(8, safeY);
+  ctx.lineTo(rect.width - 10, safeY);
   ctx.stroke();
   ctx.font = "11px ui-monospace, monospace";
-  ctx.fillText(label, 12, y - 5);
+  ctx.fillText(label, 12, safeY - 5);
 }
 
 function drawReplayLabel(ctx, x, y, label, color) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  const canvasRect = elements.replayCanvas.getBoundingClientRect();
   ctx.fillStyle = "rgba(9, 10, 8, 0.82)";
   ctx.strokeStyle = color;
   ctx.lineWidth = 1;
   const width = Math.max(48, label.length * 7 + 14);
+  const safeX = clamp(x, 8, Math.max(8, canvasRect.width - width - 8));
+  const safeY = clamp(y, 28, Math.max(28, canvasRect.height - 34));
   ctx.beginPath();
-  ctx.roundRect(x, y, width, 24, 6);
+  ctx.roundRect(safeX, safeY, width, 24, 6);
   ctx.fill();
   ctx.stroke();
   ctx.fillStyle = color;
   ctx.font = "700 11px ui-sans-serif, system-ui";
-  ctx.fillText(label, x + 7, y + 16);
+  ctx.fillText(label, safeX + 7, safeY + 16);
 }
 
 function updateReplayJournal(activeResult, context, visibleCandles, entryProjection) {
