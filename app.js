@@ -105,6 +105,21 @@ const state = {
   topDownZones: [],
   chartZoneHitboxes: [],
   selectedZone: null,
+  marketFlow: {
+    status: "active",
+    lastUpdateAt: 0,
+    lastCandleAt: null,
+    lastSignature: "",
+  },
+  tsrAnalysis: {
+    status: "active",
+    pending: false,
+    cacheKey: "",
+    cached: { zones: [], bias: "WAIT" },
+    lastAnalysisAt: 0,
+    lastError: "",
+  },
+  lastChartRender: null,
 };
 
 const elements = {
@@ -144,6 +159,10 @@ const elements = {
   rsiValue: document.getElementById("rsiValue"),
   rsiLine: document.getElementById("rsiLine"),
   chartInterval: document.getElementById("chartInterval"),
+  marketFlowStatus: document.getElementById("marketFlowStatus"),
+  tsrAnalysisStatus: document.getElementById("tsrAnalysisStatus"),
+  lastCandleAt: document.getElementById("lastCandleAt"),
+  lastAnalysisAt: document.getElementById("lastAnalysisAt"),
   sessionName: document.getElementById("sessionName"),
   marketBias: document.getElementById("marketBias"),
   scoreTop: document.getElementById("scoreTop"),
@@ -197,7 +216,9 @@ function boot() {
   initTsrDataApi();
   evaluateAndRender();
   window.setInterval(evaluateAndRender, 4500);
-  window.setInterval(refreshLiveData, 15000);
+  window.setInterval(refreshLiveData, 5000);
+  window.setInterval(updateFlowWatchdog, 1000);
+  updateFlowMonitor();
 }
 
 function renderTradingView() {
@@ -468,6 +489,49 @@ function initDraggableSignalCards() {
   });
 }
 
+function markMarketFlowUpdate(candles = []) {
+  const last = candles[candles.length - 1];
+  state.marketFlow.status = "active";
+  state.marketFlow.lastUpdateAt = Date.now();
+  state.marketFlow.lastCandleAt = last?.time instanceof Date ? last.time : new Date();
+  state.marketFlow.lastSignature = last ? getCandleSignature(last) : state.marketFlow.lastSignature;
+  updateFlowMonitor();
+}
+
+function updateFlowWatchdog() {
+  if (state.replay.active) {
+    state.marketFlow.status = "active";
+    updateFlowMonitor();
+    return;
+  }
+  const age = Date.now() - (state.marketFlow.lastUpdateAt || 0);
+  if (state.marketFlow.lastUpdateAt && age > 10000) {
+    state.marketFlow.status = "interrupted";
+    elements.apiNotice.textContent = "Flux marché interrompu";
+    elements.apiNotice.hidden = false;
+  }
+  updateFlowMonitor();
+}
+
+function updateFlowMonitor() {
+  const marketActive = state.marketFlow.status !== "interrupted";
+  elements.marketFlowStatus.textContent = marketActive ? "Temps réel actif" : "Flux interrompu";
+  elements.marketFlowStatus.dataset.status = marketActive ? "active" : "blocked";
+  elements.tsrAnalysisStatus.textContent = state.tsrAnalysis.status === "running" ? "Analyse en cours" : state.tsrAnalysis.status === "blocked" ? "Analyse bloquée" : "Analyse active";
+  elements.tsrAnalysisStatus.dataset.status = state.tsrAnalysis.status === "running" ? "running" : state.tsrAnalysis.status === "blocked" ? "blocked" : "active";
+  elements.lastCandleAt.textContent = state.marketFlow.lastUpdateAt ? formatClockTime(new Date(state.marketFlow.lastUpdateAt)) : "--:--:--";
+  elements.lastAnalysisAt.textContent = state.tsrAnalysis.lastAnalysisAt ? formatClockTime(new Date(state.tsrAnalysis.lastAnalysisAt)) : "--:--:--";
+}
+
+function formatClockTime(date) {
+  return date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function getCandleSignature(candle) {
+  if (!candle) return "";
+  return `${candle.time instanceof Date ? candle.time.getTime() : candle.time}-${candle.open}-${candle.high}-${candle.low}-${candle.close}-${candle.volume || 0}`;
+}
+
 function getDraggableSignalCards() {
   return [elements.chartSignalAlert, elements.chartDecisionCard].filter(Boolean);
 }
@@ -621,6 +685,7 @@ async function loadApiHistory() {
   state.api.available = true;
   state.api.historySource = "tsr-data-api";
   state.api.history = candles;
+  markMarketFlowUpdate(candles);
   elements.apiNotice.hidden = true;
   return state.api.history;
 }
@@ -649,6 +714,7 @@ async function loadMarketFallbackHistory(reason = "") {
 
     state.api.history = candles;
     state.api.historySource = "market-fallback";
+    markMarketFlowUpdate(candles);
     elements.apiNotice.textContent = `${reason ? `${reason} ` : ""}TradingView visible + analyse TSR active via flux OHLCV fallback ${data.sourceSymbol || "GC=F"}.`;
     elements.apiNotice.hidden = false;
     return state.api.history;
@@ -901,6 +967,7 @@ function evaluateReplayAndRender() {
   }
 
   const visibleCandles = state.replay.candles.slice(0, state.replay.index + 1);
+  markMarketFlowUpdate(visibleCandles);
   const context = buildReplayContext(visibleCandles);
   state.tick = state.replay.index;
   state.basePrice = context.last.close;
@@ -1070,7 +1137,8 @@ function drawReplayChart(candles, context, activeResult, entryProjection) {
     isPriceVisible: (price) => Number.isFinite(price) && price >= min && price <= max,
   };
 
-  const topDownAnalysis = buildTopDownAnalysis(candles, context, activeResult, entryProjection);
+  state.lastChartRender = { candles, context, activeResult, entryProjection };
+  const topDownAnalysis = getTopDownAnalysisForRender(candles, context, activeResult, entryProjection);
   state.topDownZones = topDownAnalysis.zones;
   if (state.selectedZone) state.selectedZone = state.topDownZones.find((zone) => zone.id === state.selectedZone.id) || null;
   state.chartZoneHitboxes = [];
@@ -1164,6 +1232,80 @@ function buildVisiblePriceScale(visibleCandles, allCandles, visibleStartIndex) {
     discreetMin: min - extended,
     discreetMax: max + extended,
   };
+}
+
+function getTopDownAnalysisForRender(candles, context, activeResult, entryProjection) {
+  const cacheKey = getTopDownCacheKey(candles, context);
+  const cached = state.tsrAnalysis.cached || { zones: [], bias: "WAIT" };
+  const refreshedCached = refreshCachedTopDownStatuses(cached, candles, context, activeResult, entryProjection);
+  state.tsrAnalysis.cached = refreshedCached;
+
+  if (cacheKey && cacheKey !== state.tsrAnalysis.cacheKey && !state.tsrAnalysis.pending) {
+    scheduleTopDownAnalysis(cacheKey, candles, context, activeResult, entryProjection);
+  }
+
+  return refreshedCached;
+}
+
+function getTopDownCacheKey(candles, context) {
+  const last = candles[candles.length - 1];
+  if (!last) return "";
+  const lastTime = last.time instanceof Date ? last.time.getTime() : Date.now();
+  const h1Bucket = state.replay.active ? Math.floor(candles.length / 4) : Math.floor(lastTime / 3600000);
+  const structureSource = candles.slice(-96);
+  const high = Math.max(...structureSource.map((candle) => candle.high));
+  const low = Math.min(...structureSource.map((candle) => candle.low));
+  const structureKey = `${Math.round(high * 10)}-${Math.round(low * 10)}-${context.market?.bias || "WAIT"}`;
+  return `${state.intervalLabel}-${h1Bucket}-${structureKey}`;
+}
+
+function refreshCachedTopDownStatuses(cached, candles, context, activeResult, entryProjection) {
+  const last = candles[candles.length - 1];
+  if (!last || !cached?.zones?.length) return cached || { zones: [], bias: "WAIT" };
+  return {
+    ...cached,
+    zones: cached.zones.map((zone) => enrichTopDownZone(zone, last, context, activeResult, entryProjection)),
+  };
+}
+
+function scheduleTopDownAnalysis(cacheKey, candles, context, activeResult, entryProjection) {
+  state.tsrAnalysis.pending = true;
+  state.tsrAnalysis.status = "running";
+  state.tsrAnalysis.lastError = "";
+  updateFlowMonitor();
+
+  const analysisCandles = candles.slice(-220);
+  const analysisContext = {
+    ...context,
+    market: { ...context.market },
+    zones: { ...context.zones },
+    confirmation: { ...context.confirmation },
+    last: context.last ? { ...context.last } : analysisCandles[analysisCandles.length - 1],
+  };
+  const analysisResult = { ...activeResult };
+  const analysisProjection = entryProjection ? { ...entryProjection, setup: { ...entryProjection.setup }, metrics: { ...entryProjection.metrics } } : null;
+
+  window.setTimeout(() => {
+    try {
+      const result = buildTopDownAnalysis(analysisCandles, analysisContext, analysisResult, analysisProjection);
+      state.tsrAnalysis.cached = result;
+      state.tsrAnalysis.cacheKey = cacheKey;
+      state.tsrAnalysis.status = "active";
+      state.tsrAnalysis.lastAnalysisAt = Date.now();
+      state.tsrAnalysis.lastError = "";
+    } catch (error) {
+      state.tsrAnalysis.status = "blocked";
+      state.tsrAnalysis.lastError = error?.message || "Analyse TSR bloquée";
+    } finally {
+      state.tsrAnalysis.pending = false;
+      updateFlowMonitor();
+    }
+
+    const latest = state.lastChartRender;
+    if (latest && getTopDownCacheKey(latest.candles, latest.context) === cacheKey) {
+      window.requestAnimationFrame(() => drawReplayChart(latest.candles, latest.context, latest.activeResult, latest.entryProjection));
+    }
+  }, 0);
 }
 
 function getVisibleClassicPriceValues(candles, visibleStartIndex) {
@@ -1495,6 +1637,7 @@ function pushTopDownZone(zones, seen, zone, last, context, activeResult, entryPr
 }
 
 function enrichTopDownZone(zone, last, context, activeResult, entryProjection) {
+  const baseReason = zone.baseReason || zone.reason;
   const range = Math.max(0.0001, zone.top - zone.bottom);
   const distance = last.close > zone.top ? last.close - zone.top : last.close < zone.bottom ? zone.bottom - last.close : 0;
   const inside = last.high >= zone.bottom && last.low <= zone.top;
@@ -1517,7 +1660,8 @@ function enrichTopDownZone(zone, last, context, activeResult, entryProjection) {
     tp2: setup.tp2,
     tp3: setup.tp3,
     label: `${zone.type} ${zone.timeframe} ${zone.direction}`,
-    reason: `${zone.reason} + statut ${status}`,
+    baseReason,
+    reason: `${baseReason} + statut ${status}`,
   };
 }
 

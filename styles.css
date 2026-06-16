@@ -466,6 +466,7 @@ button:active {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--line);
@@ -491,6 +492,54 @@ button:active {
   background: rgba(59, 216, 189, 0.12);
   color: var(--teal);
   font-weight: 700;
+}
+
+.flow-monitor {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  gap: 4px 13px;
+  min-width: 280px;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.flow-monitor span {
+  white-space: nowrap;
+}
+
+.flow-monitor strong {
+  color: var(--green);
+  font-weight: 800;
+}
+
+.flow-monitor strong::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 3px rgba(70, 209, 123, 0.14);
+  vertical-align: 1px;
+}
+
+.flow-monitor strong[data-status="running"] {
+  color: var(--gold);
+}
+
+.flow-monitor strong[data-status="running"]::before {
+  background: var(--gold);
+  box-shadow: 0 0 0 3px rgba(231, 184, 78, 0.16);
+}
+
+.flow-monitor strong[data-status="blocked"] {
+  color: var(--red);
+}
+
+.flow-monitor strong[data-status="blocked"]::before {
+  background: var(--red);
+  box-shadow: 0 0 0 3px rgba(239, 98, 98, 0.16);
 }
 
 .live-dot {
