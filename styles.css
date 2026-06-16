@@ -869,6 +869,60 @@ button:active {
   text-shadow: 0 1px 8px #000;
 }
 
+.zone-info-card {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 8;
+  width: min(360px, calc(100% - 36px));
+  display: grid;
+  gap: 8px;
+  padding: 13px 14px;
+  border: 1px solid rgba(231, 184, 78, 0.56);
+  border-radius: 8px;
+  background: rgba(9, 10, 8, 0.94);
+  color: var(--text);
+  pointer-events: auto;
+  box-shadow: 0 18px 34px rgba(0, 0, 0, 0.42);
+}
+
+.zone-info-card strong {
+  color: var(--gold);
+  font-size: 0.88rem;
+  text-transform: uppercase;
+}
+
+.zone-info-card span,
+.zone-info-card p,
+.zone-info-card dd {
+  margin: 0;
+  color: #dcd6c8;
+  font-size: 0.78rem;
+}
+
+.zone-info-card dl {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 5px 9px;
+  margin: 0;
+}
+
+.zone-info-card dt {
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
+.zone-info-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+
 .overlay-ob {
   border-color: rgba(231, 184, 78, 0.7);
   background: rgba(231, 184, 78, 0.16);

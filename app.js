@@ -6,6 +6,8 @@ const smartMoneyOverlays = [
   { id: "liquiditySweep", label: "Liquidity Sweep", defaultOn: true },
   { id: "bos", label: "BOS", defaultOn: true },
   { id: "choch", label: "ChoCH", defaultOn: true },
+  { id: "premiumDiscount", label: "Premium / Discount", defaultOn: true },
+  { id: "ote", label: "OTE 0.705", defaultOn: true },
   { id: "idm", label: "IDM / Inducement", defaultOn: true },
   { id: "target", label: "Target", defaultOn: true },
   { id: "trendlines", label: "Trendlines", defaultOn: false },
@@ -42,6 +44,16 @@ const SMART_SCORE_DEFAULT_MINIMUM = 70;
 const GOLD_SCORE_DEFAULT_MINIMUM = 80;
 const PRICE_SCALE_VISIBLE_CANDLES = 72;
 const PRICE_SCALE_MARGIN_RATIO = 0.12;
+const TOP_DOWN_TIMEFRAMES = [
+  { label: "Mensuel", group: 180, weight: 24, role: "historique large" },
+  { label: "Weekly", group: 132, weight: 22, role: "liquidite majeure" },
+  { label: "Daily", group: 96, weight: 20, role: "biais global" },
+  { label: "H4", group: 72, weight: 18, role: "structure externe" },
+  { label: "H1", group: 54, weight: 16, role: "direction principale" },
+  { label: "M30", group: 38, weight: 13, role: "raffinement" },
+  { label: "M15", group: 28, weight: 11, role: "FVG / ChoCH" },
+  { label: "M5", group: 16, weight: 9, role: "precision scalping" },
+];
 
 const state = {
   interval: "240",
@@ -90,6 +102,9 @@ const state = {
     journal: [],
     loggedKeys: new Set(),
   },
+  topDownZones: [],
+  chartZoneHitboxes: [],
+  selectedZone: null,
 };
 
 const elements = {
@@ -368,6 +383,7 @@ function bindInteractions() {
     setTimeout(evaluateAndRender, 160);
   });
   elements.resetSignalPositions.addEventListener("click", resetDraggableSignalCards);
+  elements.replayCanvas.addEventListener("click", handleChartZoneClick);
   elements.riskRewardMinimum.addEventListener("change", () => {
     state.riskRewardMinimum = Number(elements.riskRewardMinimum.value) || RISK_REWARD_DEFAULT_MINIMUM;
     writeRiskRewardMinimum();
@@ -1054,6 +1070,11 @@ function drawReplayChart(candles, context, activeResult, entryProjection) {
     isPriceVisible: (price) => Number.isFinite(price) && price >= min && price <= max,
   };
 
+  const topDownAnalysis = buildTopDownAnalysis(candles, context, activeResult, entryProjection);
+  state.topDownZones = topDownAnalysis.zones;
+  if (state.selectedZone) state.selectedZone = state.topDownZones.find((zone) => zone.id === state.selectedZone.id) || null;
+  state.chartZoneHitboxes = [];
+
   drawReplayGrid(ctx, rect);
   drawClassicIndicators(ctx, geometry, candles);
   visible.forEach((candle, index) => {
@@ -1084,7 +1105,8 @@ function drawReplayChart(candles, context, activeResult, entryProjection) {
     }
   });
 
-  drawReplayOverlays(ctx, rect, context, activeResult, geometry, entryProjection);
+  drawReplayOverlays(ctx, rect, context, activeResult, geometry, entryProjection, topDownAnalysis);
+  renderSelectedZoneInfo();
 }
 
 function drawReplayMessage(message) {
@@ -1302,7 +1324,259 @@ function calculateSuperTrendSeries(candles) {
   });
 }
 
-function drawReplayOverlays(ctx, rect, context, activeResult, geometry, entryProjection) {
+function buildTopDownAnalysis(candles, context, activeResult, entryProjection) {
+  const usableCandles = candles.filter((candle) => [candle.open, candle.high, candle.low, candle.close].every(Number.isFinite));
+  const last = usableCandles[usableCandles.length - 1];
+  if (!last || usableCandles.length < 12) return { zones: [], bias: "WAIT" };
+
+  const broad = usableCandles.slice(-Math.min(usableCandles.length, 180));
+  const broadHigh = Math.max(...broad.map((candle) => candle.high));
+  const broadLow = Math.min(...broad.map((candle) => candle.low));
+  const broadMid = broadLow + (broadHigh - broadLow) / 2;
+  const globalBias = last.close >= broadMid ? "SELL" : "BUY";
+  const zones = [];
+  const seen = new Set();
+
+  TOP_DOWN_TIMEFRAMES.forEach((timeframe) => {
+    const segment = usableCandles.slice(-Math.min(usableCandles.length, timeframe.group));
+    if (segment.length < 8) return;
+    const startIndex = usableCandles.length - segment.length;
+    const structure = getSegmentStructure(segment, startIndex);
+    const tfBias = getTopDownBias(segment, structure, globalBias);
+    addTopDownObZone(zones, seen, segment, startIndex, timeframe, tfBias, last, context, activeResult, entryProjection);
+    addTopDownFvgZone(zones, seen, segment, startIndex, timeframe, tfBias, last, context, activeResult, entryProjection);
+    addTopDownLiquidityZones(zones, seen, segment, startIndex, timeframe, tfBias, last, context, activeResult, entryProjection);
+    addTopDownOteZone(zones, seen, segment, startIndex, timeframe, tfBias, last, structure, context, activeResult, entryProjection);
+  });
+
+  const rankedZones = zones
+    .filter((zone) => Number.isFinite(zone.top) && Number.isFinite(zone.bottom) && zone.top !== zone.bottom)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 18);
+
+  return { zones: rankedZones, bias: globalBias };
+}
+
+function getSegmentStructure(segment, startIndex) {
+  let highIndex = 0;
+  let lowIndex = 0;
+  segment.forEach((candle, index) => {
+    if (candle.high > segment[highIndex].high) highIndex = index;
+    if (candle.low < segment[lowIndex].low) lowIndex = index;
+  });
+  return {
+    swingHigh: segment[highIndex].high,
+    swingLow: segment[lowIndex].low,
+    highIndex: startIndex + highIndex,
+    lowIndex: startIndex + lowIndex,
+    range: Math.max(0.0001, segment[highIndex].high - segment[lowIndex].low),
+  };
+}
+
+function getTopDownBias(segment, structure, fallbackBias) {
+  const first = segment[0];
+  const last = segment[segment.length - 1];
+  const move = last.close - first.open;
+  if (Math.abs(move) < structure.range * 0.12) return fallbackBias;
+  return move > 0 ? "BUY" : "SELL";
+}
+
+function addTopDownObZone(zones, seen, segment, startIndex, timeframe, direction, last, context, activeResult, entryProjection) {
+  if (direction !== "BUY" && direction !== "SELL") return;
+  const impulse = findDisplacementCandle(segment, direction);
+  if (!impulse) return;
+  const searchEnd = Math.max(0, impulse.index);
+  const opposite = direction === "BUY"
+    ? findLastCandle(segment.slice(0, searchEnd), (candle) => candle.close < candle.open)
+    : findLastCandle(segment.slice(0, searchEnd), (candle) => candle.close > candle.open);
+  if (!opposite) return;
+  const absoluteIndex = startIndex + opposite.index;
+  const height = Math.max(opposite.candle.high - opposite.candle.low, Math.abs(opposite.candle.close - opposite.candle.open), 0.7);
+  const top = Math.max(opposite.candle.open, opposite.candle.close) + height * 0.12;
+  const bottom = Math.min(opposite.candle.open, opposite.candle.close) - height * 0.12;
+  pushTopDownZone(zones, seen, {
+    type: "OB",
+    timeframe: timeframe.label,
+    direction,
+    startIndex: absoluteIndex,
+    endIndex: startIndex + segment.length - 1,
+    top,
+    bottom,
+    score: timeframe.weight + 36 + (impulse.scan.detections.displacement ? 10 : 0),
+    reason: `OB ${timeframe.label} cree par derniere bougie opposee avant displacement ${direction}`,
+    source: timeframe.role,
+  }, last, context, activeResult, entryProjection);
+}
+
+function addTopDownFvgZone(zones, seen, segment, startIndex, timeframe, direction, last, context, activeResult, entryProjection) {
+  const fvg = findTopDownFvg(segment, direction);
+  if (!fvg) return;
+  pushTopDownZone(zones, seen, {
+    type: "FVG",
+    timeframe: timeframe.label,
+    direction,
+    startIndex: startIndex + fvg.index - 2,
+    endIndex: startIndex + segment.length - 1,
+    top: fvg.top,
+    bottom: fvg.bottom,
+    score: timeframe.weight + 28 + (timeframe.label === "M15" || timeframe.label === "M5" ? 8 : 0),
+    reason: `FVG ${timeframe.label} reel detecte entre trois bougies`,
+    source: timeframe.role,
+  }, last, context, activeResult, entryProjection);
+}
+
+function addTopDownLiquidityZones(zones, seen, segment, startIndex, timeframe, direction, last, context, activeResult, entryProjection) {
+  const equalHigh = findEqualLiquidity(segment, "high");
+  const equalLow = findEqualLiquidity(segment, "low");
+  if (equalHigh && (direction === "SELL" || timeframe.weight >= 18)) {
+    const pad = Math.max(0.35, equalHigh.tolerance * 1.3);
+    pushTopDownZone(zones, seen, {
+      type: "Liquidite",
+      timeframe: timeframe.label,
+      direction: "SELL",
+      startIndex: startIndex + equalHigh.start,
+      endIndex: startIndex + equalHigh.end,
+      top: equalHigh.price + pad,
+      bottom: equalHigh.price - pad,
+      score: timeframe.weight + 24,
+      reason: `Equal High ${timeframe.label} / liquidite haute visible`,
+      source: timeframe.role,
+    }, last, context, activeResult, entryProjection);
+  }
+  if (equalLow && (direction === "BUY" || timeframe.weight >= 18)) {
+    const pad = Math.max(0.35, equalLow.tolerance * 1.3);
+    pushTopDownZone(zones, seen, {
+      type: "Liquidite",
+      timeframe: timeframe.label,
+      direction: "BUY",
+      startIndex: startIndex + equalLow.start,
+      endIndex: startIndex + equalLow.end,
+      top: equalLow.price + pad,
+      bottom: equalLow.price - pad,
+      score: timeframe.weight + 24,
+      reason: `Equal Low ${timeframe.label} / liquidite basse visible`,
+      source: timeframe.role,
+    }, last, context, activeResult, entryProjection);
+  }
+}
+
+function addTopDownOteZone(zones, seen, segment, startIndex, timeframe, direction, last, structure, context, activeResult, entryProjection) {
+  if ((direction !== "BUY" && direction !== "SELL") || timeframe.weight < 11) return;
+  const range = structure.range;
+  const buyLower = structure.swingHigh - range * 0.79;
+  const buyUpper = structure.swingHigh - range * 0.618;
+  const sellLower = structure.swingLow + range * 0.618;
+  const sellUpper = structure.swingLow + range * 0.79;
+  const lower = direction === "BUY" ? Math.min(buyLower, buyUpper) : Math.min(sellLower, sellUpper);
+  const upper = direction === "BUY" ? Math.max(buyLower, buyUpper) : Math.max(sellLower, sellUpper);
+  const center = direction === "BUY" ? structure.swingHigh - range * 0.705 : structure.swingLow + range * 0.705;
+  pushTopDownZone(zones, seen, {
+    type: "OTE",
+    timeframe: timeframe.label,
+    direction,
+    startIndex: Math.min(structure.highIndex, structure.lowIndex),
+    endIndex: startIndex + segment.length - 1,
+    top: upper,
+    bottom: lower,
+    score: timeframe.weight + 18,
+    reason: `OTE 0.618-0.79 ${timeframe.label}, centre 0.705 a ${formatPrice(center)}`,
+    source: "premium / discount",
+  }, last, context, activeResult, entryProjection);
+}
+
+function pushTopDownZone(zones, seen, zone, last, context, activeResult, entryProjection) {
+  const top = Math.max(zone.top, zone.bottom);
+  const bottom = Math.min(zone.top, zone.bottom);
+  const id = `${zone.type}-${zone.timeframe}-${zone.direction}-${Math.round(top * 10)}-${Math.round(bottom * 10)}-${zone.startIndex}`;
+  if (seen.has(id)) return;
+  seen.add(id);
+  const enriched = enrichTopDownZone({ ...zone, id, top, bottom }, last, context, activeResult, entryProjection);
+  if (enriched.score >= 42) zones.push(enriched);
+}
+
+function enrichTopDownZone(zone, last, context, activeResult, entryProjection) {
+  const range = Math.max(0.0001, zone.top - zone.bottom);
+  const distance = last.close > zone.top ? last.close - zone.top : last.close < zone.bottom ? zone.bottom - last.close : 0;
+  const inside = last.high >= zone.bottom && last.low <= zone.top;
+  const near = distance <= Math.max(range * 2.2, Math.abs(last.close) * 0.0012);
+  const invalidated = zone.direction === "BUY" ? last.close < zone.bottom - range * 0.35 : last.close > zone.top + range * 0.35;
+  const confirmed = activeResult.valid && activeResult.direction === zone.direction && inside;
+  const status = invalidated ? "invalidée" : confirmed ? "signal confirmé" : inside ? "entrée imminente" : near ? "entrée potentielle" : "zone future";
+  const setup = zone.direction === "BUY"
+    ? buildZoneSetup(zone, last.close, zone.bottom - range * 0.45, 1)
+    : buildZoneSetup(zone, last.close, zone.top + range * 0.45, -1);
+  const score = clamp(Math.round(zone.score + (inside ? 16 : near ? 9 : 0) + (context.confirmation?.choch ? 7 : 0) + (entryProjection?.stage === "confirmed" ? 10 : 0) - (invalidated ? 32 : 0)), 0, 100);
+  return {
+    ...zone,
+    score,
+    status,
+    invalidation: zone.direction === "BUY" ? `Cloture sous ${formatPrice(zone.bottom - range * 0.35)}` : `Cloture au-dessus de ${formatPrice(zone.top + range * 0.35)}`,
+    entry: setup.entry,
+    sl: setup.sl,
+    tp1: setup.tp1,
+    tp2: setup.tp2,
+    tp3: setup.tp3,
+    label: `${zone.type} ${zone.timeframe} ${zone.direction}`,
+    reason: `${zone.reason} + statut ${status}`,
+  };
+}
+
+function buildZoneSetup(zone, referencePrice, stop, sign) {
+  const entryRaw = zone.direction === "BUY" ? Math.min(Math.max(referencePrice, zone.bottom), zone.top) : Math.max(Math.min(referencePrice, zone.top), zone.bottom);
+  const risk = Math.max(0.0001, Math.abs(entryRaw - stop));
+  return {
+    entry: formatPrice(entryRaw),
+    sl: formatPrice(stop),
+    tp1: formatPrice(entryRaw + sign * risk * 1.25),
+    tp2: formatPrice(entryRaw + sign * risk * 2),
+    tp3: formatPrice(entryRaw + sign * risk * 3),
+  };
+}
+
+function findDisplacementCandle(segment, direction) {
+  const scanned = segment.map((_, index) => scanCandle(segment, index)).filter(Boolean);
+  return scanned
+    .map((scan, index) => ({ scan, index }))
+    .reverse()
+    .find(({ scan }) => {
+      const aligned = direction === "BUY" ? scan.close > scan.open : scan.close < scan.open;
+      return aligned && (scan.detections.displacement || scan.bodyRatio >= 0.52) && scan.totalSize > 0;
+    }) || null;
+}
+
+function findLastCandle(segment, predicate) {
+  for (let index = segment.length - 1; index >= 0; index -= 1) {
+    if (predicate(segment[index])) return { candle: segment[index], index };
+  }
+  return null;
+}
+
+function findTopDownFvg(segment, direction) {
+  for (let index = segment.length - 1; index >= 2; index -= 1) {
+    const before = segment[index - 2];
+    const current = segment[index];
+    if (direction === "BUY" && current.low > before.high) return { index, top: current.low, bottom: before.high };
+    if (direction === "SELL" && current.high < before.low) return { index, top: before.low, bottom: current.high };
+  }
+  return null;
+}
+
+function findEqualLiquidity(segment, field) {
+  const range = Math.max(0.0001, Math.max(...segment.map((candle) => candle.high)) - Math.min(...segment.map((candle) => candle.low)));
+  const tolerance = Math.max(0.25, range * 0.012);
+  for (let index = segment.length - 1; index >= 4; index -= 1) {
+    const price = segment[index][field];
+    for (let compare = index - 3; compare >= Math.max(0, index - 18); compare -= 1) {
+      const other = segment[compare][field];
+      if (Math.abs(price - other) <= tolerance) {
+        return { price: (price + other) / 2, start: compare, end: index, tolerance };
+      }
+    }
+  }
+  return null;
+}
+
+function drawReplayOverlays(ctx, rect, context, activeResult, geometry, entryProjection, topDownAnalysis = { zones: [] }) {
   const visible = state.smartMoneyVisibility;
   const { priceToY, candleToX, visible: candles, visibleStartIndex, plotRight } = geometry;
   const highY = priceToY(context.previousHigh);
@@ -1310,23 +1584,8 @@ function drawReplayOverlays(ctx, rect, context, activeResult, geometry, entryPro
   const lastIndex = visibleStartIndex + candles.length - 1;
   const swingHighIndex = findSwingIndex(candles, "high") + visibleStartIndex;
   const swingLowIndex = findSwingIndex(candles, "low") + visibleStartIndex;
-  const ob = getReplayOrderBlockZone(candles, context.market.bias, visibleStartIndex);
-  const fvg = getReplayFvgZone(candles, context.market.bias, visibleStartIndex);
 
-  if (visible.orderBlocks) {
-    drawPriceTimeZone(ctx, ob, geometry, {
-      label: "OB",
-      fill: "rgba(231, 184, 78, 0.16)",
-      stroke: "rgba(231, 184, 78, 0.72)",
-    });
-  }
-  if (visible.fvg && fvg) {
-    drawPriceTimeZone(ctx, fvg, geometry, {
-      label: "FVG",
-      fill: "rgba(59, 216, 189, 0.13)",
-      stroke: "rgba(59, 216, 189, 0.68)",
-    });
-  }
+  drawTopDownZones(ctx, rect, geometry, topDownAnalysis.zones || []);
   if (visible.equalHigh || visible.previousHL) drawReplayLine(ctx, highY, "#74a7ff", "Previous High / EQH", rect);
   if (visible.equalLow || visible.previousHL) drawReplayLine(ctx, lowY, "#74a7ff", "Previous Low / EQL", rect);
   if (visible.liquiditySweep && context.zones.liquidityTaken) {
@@ -1359,7 +1618,78 @@ function drawReplayOverlays(ctx, rect, context, activeResult, geometry, entryPro
     ctx.lineTo(candleToX(lastIndex), priceToY(context.last.close));
     ctx.stroke();
   }
-  drawReplayEntryProjection(ctx, rect, entryProjection, geometry);
+  const projectionZone = (topDownAnalysis.zones || []).find((zone) => zone.direction === entryProjection?.direction && zone.status !== "invalidée");
+  drawReplayEntryProjection(ctx, rect, entryProjection, geometry, projectionZone);
+}
+
+function drawTopDownZones(ctx, rect, geometry, zones) {
+  state.chartZoneHitboxes = [];
+  zones.forEach((zone) => {
+    if (!shouldDrawTopDownZone(zone)) return;
+    drawTopDownZone(ctx, rect, geometry, zone);
+  });
+}
+
+function shouldDrawTopDownZone(zone) {
+  const visible = state.smartMoneyVisibility;
+  const typeVisible = zone.type === "OB"
+    ? visible.orderBlocks
+    : zone.type === "FVG"
+      ? visible.fvg
+      : zone.type === "OTE"
+        ? visible.ote || visible.premiumDiscount
+        : visible.equalHigh || visible.equalLow || visible.liquiditySweep || visible.previousHL;
+  if (!typeVisible) return false;
+  if (zone.status === "zone future") return Boolean(visible.futureZones || visible.entryZones);
+  if (zone.status === "entrée potentielle") return Boolean(visible.potentialEntries);
+  if (zone.status === "entrée imminente") return Boolean(visible.imminentEntries);
+  if (zone.status === "signal confirmé") return Boolean(visible.confirmedSignals);
+  if (zone.status === "invalidée") return Boolean(visible.futureZones);
+  return true;
+}
+
+function drawTopDownZone(ctx, rect, geometry, zone) {
+  const { candleToX, candleWidth, plotRight, clampPriceY, isPriceNearView } = geometry;
+  if (!isPriceNearView(zone.top) && !isPriceNearView(zone.bottom)) return;
+  const left = Math.max(8, candleToX(zone.startIndex) - candleWidth * 0.45);
+  const right = Math.min(plotRight, candleToX(zone.endIndex) + candleWidth * 0.45);
+  const topY = clampPriceY(zone.top);
+  const bottomY = clampPriceY(zone.bottom);
+  const y = Math.min(topY, bottomY);
+  const height = Math.max(8, Math.min(190, Math.abs(bottomY - topY)));
+  const width = Math.max(42, right - left);
+  const style = getTopDownZoneStyle(zone);
+
+  ctx.save();
+  ctx.globalAlpha = style.alpha;
+  ctx.fillStyle = style.fill;
+  ctx.strokeStyle = style.stroke;
+  ctx.lineWidth = style.lineWidth;
+  if (zone.status === "invalidée") ctx.setLineDash([5, 5]);
+  ctx.fillRect(left, y, width, height);
+  ctx.strokeRect(left, y, width, height);
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = style.text;
+  ctx.font = "800 11px ui-sans-serif, system-ui";
+  const label = `${zone.type} ${zone.timeframe} ${zone.direction} · ${zone.score}`;
+  ctx.fillText(label, left + 8, clamp(y + 16, 28, rect.height - 18));
+  if (zone.status !== "zone future") {
+    ctx.font = "700 10px ui-sans-serif, system-ui";
+    ctx.fillText(zone.status, left + 8, clamp(y + 31, 42, rect.height - 10));
+  }
+  ctx.restore();
+
+  state.chartZoneHitboxes.push({ id: zone.id, left, right: left + width, top: y, bottom: y + height });
+}
+
+function getTopDownZoneStyle(zone) {
+  const htf = ["Mensuel", "Weekly", "Daily", "H4", "H1"].includes(zone.timeframe);
+  const alpha = zone.status === "invalidée" ? 0.18 : zone.status === "signal confirmé" ? 0.86 : htf ? 0.42 : 0.62;
+  if (zone.type === "OB") return { fill: "rgba(231, 184, 78, 0.18)", stroke: "rgba(231, 184, 78, 0.78)", text: "#f5d56f", alpha, lineWidth: htf ? 1 : 1.4 };
+  if (zone.type === "FVG") return { fill: "rgba(59, 216, 189, 0.15)", stroke: "rgba(59, 216, 189, 0.72)", text: "#6ff5dc", alpha, lineWidth: htf ? 1 : 1.4 };
+  if (zone.type === "OTE") return { fill: "rgba(116, 167, 255, 0.12)", stroke: "rgba(116, 167, 255, 0.7)", text: "#aecaFF", alpha, lineWidth: htf ? 1 : 1.2 };
+  return { fill: "rgba(239, 98, 98, 0.11)", stroke: "rgba(239, 98, 98, 0.68)", text: "#ffb0b0", alpha, lineWidth: htf ? 1 : 1.2 };
 }
 
 function findSwingIndex(candles, field) {
@@ -1454,7 +1784,7 @@ function drawAnchoredSegment(ctx, x1, y1, x2, y2, color, label) {
   ctx.fillText(label, Math.min(x1, x2) + Math.abs(x2 - x1) / 2 + 6, y1 - 5);
 }
 
-function drawReplayEntryProjection(ctx, rect, projection, geometry) {
+function drawReplayEntryProjection(ctx, rect, projection, geometry, sourceZone = null) {
   if (!projection || projection.direction === "WAIT") return;
   const visible = state.smartMoneyVisibility;
   const { priceToY, candleToX, visibleStartIndex, clampPriceY, isPriceNearView } = geometry;
@@ -1473,6 +1803,7 @@ function drawReplayEntryProjection(ctx, rect, projection, geometry) {
   const zoneLeft = candleToX(visibleStartIndex + Math.max(6, geometry.visible.length - 18));
   const zoneWidth = Math.max(90, rect.width - zoneLeft - 112);
   const stageRank = { future: 1, potential: 2, imminent: 3, confirmed: 4 }[projection.stage] || 0;
+  if (!sourceZone && stageRank < 4) return;
   const projectionNearView = !Number.isFinite(entry) || entryNear || slNear || tp1Near;
   if (!projectionNearView) {
     drawReplayLabel(ctx, zoneLeft, isBuy ? rect.height - 62 : 34, `${projection.direction} hors echelle visible`, color);
@@ -1480,11 +1811,15 @@ function drawReplayEntryProjection(ctx, rect, projection, geometry) {
   }
 
   if ((visible.entryZones || visible.futureZones) && visible.futureZones && stageRank >= 1) {
+    const sourceTop = sourceZone ? clampPriceY(sourceZone.top) : zoneTop;
+    const sourceBottom = sourceZone ? clampPriceY(sourceZone.bottom) : zoneTop + zoneHeight;
+    const anchoredTop = Math.min(sourceTop, sourceBottom);
+    const anchoredHeight = Math.max(20, Math.min(160, Math.abs(sourceBottom - sourceTop)));
     ctx.fillStyle = isBuy ? "rgba(70, 209, 123, 0.08)" : "rgba(239, 98, 98, 0.08)";
     ctx.strokeStyle = isBuy ? "rgba(70, 209, 123, 0.34)" : "rgba(239, 98, 98, 0.34)";
-    ctx.strokeRect(zoneLeft, zoneTop, zoneWidth, zoneHeight);
-    ctx.fillRect(zoneLeft, zoneTop, zoneWidth, zoneHeight);
-    drawReplayLabel(ctx, zoneLeft + 8, clamp(zoneTop - 28, 28, rect.height - 64), `Zone potentielle ${projection.direction}`, color);
+    ctx.strokeRect(zoneLeft, anchoredTop, zoneWidth, anchoredHeight);
+    ctx.fillRect(zoneLeft, anchoredTop, zoneWidth, anchoredHeight);
+    drawReplayLabel(ctx, zoneLeft + 8, clamp(anchoredTop - 28, 28, rect.height - 64), `Zone potentielle ${projection.direction}`, color);
   }
   if (visible.potentialEntries && stageRank >= 2) drawReplayLabel(ctx, zoneLeft + 8, zoneTop + zoneHeight + 8, "Entrée potentielle — attendre réaction", "#e7b84e");
   if (visible.imminentEntries && stageRank >= 3) drawReplayLabel(ctx, zoneLeft + 8, zoneTop + zoneHeight + 38, "Entrée imminente — prépare-toi", color);
@@ -2025,15 +2360,11 @@ function getLivePrecisionCandles() {
 
 function renderLivePrecisionChart(candles, context, activeResult, entryProjection) {
   if (state.replay.active) return;
-  elements.chartFrame.classList.toggle("tv-fallback-active", state.api.historySource === "market-fallback");
+  elements.chartFrame.classList.remove("tv-fallback-active");
   if (!candles.length) {
     elements.chartFrame.classList.add("tv-fallback-active");
     ensureTradingViewInterval();
     drawReplayMessage("Aucune bougie live TSR disponible.");
-    return;
-  }
-  if (state.api.historySource === "market-fallback") {
-    ensureTradingViewInterval();
     return;
   }
   drawReplayChart(candles, context, activeResult, entryProjection);
@@ -3251,6 +3582,42 @@ function renderStrategyOverlay(direction, zones, confirmation, entryProjection) 
 
 function clearStrategyOverlay() {
   elements.strategyOverlay.innerHTML = "";
+}
+
+function handleChartZoneClick(event) {
+  const rect = elements.replayCanvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  const hit = state.chartZoneHitboxes.find((box) => x >= box.left && x <= box.right && y >= box.top && y <= box.bottom);
+  state.selectedZone = hit ? state.topDownZones.find((zone) => zone.id === hit.id) || null : null;
+  renderSelectedZoneInfo();
+}
+
+function renderSelectedZoneInfo() {
+  if (!state.selectedZone) {
+    elements.strategyOverlay.innerHTML = "";
+    return;
+  }
+  const zone = state.selectedZone;
+  elements.strategyOverlay.innerHTML = `
+    <article class="zone-info-card">
+      <button type="button" class="zone-info-close" aria-label="Fermer">x</button>
+      <strong>${zone.label}</strong>
+      <span>${zone.status} · score ${zone.score}/100</span>
+      <p>${zone.reason}</p>
+      <dl>
+        <dt>Timeframe</dt><dd>${zone.timeframe}</dd>
+        <dt>Invalidation</dt><dd>${zone.invalidation}</dd>
+        <dt>Entree</dt><dd>${zone.entry}</dd>
+        <dt>SL</dt><dd>${zone.sl}</dd>
+        <dt>TP1 / TP2 / TP3</dt><dd>${zone.tp1} / ${zone.tp2} / ${zone.tp3}</dd>
+      </dl>
+    </article>
+  `;
+  elements.strategyOverlay.querySelector(".zone-info-close")?.addEventListener("click", () => {
+    state.selectedZone = null;
+    renderSelectedZoneInfo();
+  });
 }
 
 function renderRsiPanel(rsi) {
