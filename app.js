@@ -39,6 +39,8 @@ const DRAG_STORAGE_KEY = "tsr-draggable-signal-card-positions";
 const RISK_REWARD_STORAGE_KEY = "tsr-risk-reward-minimum";
 const SCORE_FILTER_STORAGE_KEY = "tsr-score-filter-minimums";
 const PRICE_AUTO_FIT_STORAGE_KEY = "tsr-price-auto-fit-visible-candles";
+const PRICE_CANDLES_ONLY_STORAGE_KEY = "tsr-price-auto-scale-candles-only";
+const PRICE_FIT_VISIBLE_STORAGE_KEY = "tsr-price-fit-visible-candles";
 const RISK_REWARD_DEFAULT_MINIMUM = 1.2;
 const SMART_SCORE_DEFAULT_MINIMUM = 65;
 const GOLD_SCORE_DEFAULT_MINIMUM = 75;
@@ -74,6 +76,8 @@ const state = {
   analysisMode: "smart",
   showBothAnalyses: false,
   autoFitVisibleCandles: true,
+  autoScaleCandlesOnly: true,
+  fitToVisibleCandles: true,
   showTsrChartZones: true,
   forceRecentPriceCenter: 0,
   riskRewardMinimum: RISK_REWARD_DEFAULT_MINIMUM,
@@ -159,6 +163,8 @@ const elements = {
   toggleTsrZones: document.getElementById("toggleTsrZones"),
   recenterPrice: document.getElementById("recenterPrice"),
   autoFitVisibleCandles: document.getElementById("autoFitVisibleCandles"),
+  autoScaleCandlesOnly: document.getElementById("autoScaleCandlesOnly"),
+  fitToVisibleCandles: document.getElementById("fitToVisibleCandles"),
   riskRewardMinimum: document.getElementById("riskRewardMinimum"),
   smartScoreMinimum: document.getElementById("smartScoreMinimum"),
   goldScoreMinimum: document.getElementById("goldScoreMinimum"),
@@ -251,6 +257,8 @@ function renderTradingView() {
   }
 
   state.tvInterval = state.interval;
+  const candlesOnly = state.autoScaleCandlesOnly;
+  const fitVisible = state.fitToVisibleCandles;
   state.widget = new window.TradingView.widget({
     autosize: true,
     symbol: "OANDA:XAUUSD",
@@ -264,6 +272,7 @@ function renderTradingView() {
     hide_side_toolbar: false,
     details: true,
     calendar: false,
+    hide_volume: candlesOnly,
     studies: [],
     disabled_features: [
       "header_symbol_search",
@@ -284,13 +293,15 @@ function renderTradingView() {
       "mainSeriesProperties.candleStyle.wickDownColor": "#ff5b5b",
       "mainSeriesProperties.candleStyle.drawWick": true,
       "mainSeriesProperties.candleStyle.drawBorder": true,
-      "mainSeriesProperties.priceAxisProperties.autoScale": true,
+      "mainSeriesProperties.priceAxisProperties.autoScale": fitVisible,
       "mainSeriesProperties.priceAxisProperties.lockScale": false,
       "mainSeriesProperties.priceAxisProperties.percentage": false,
       "mainSeriesProperties.priceAxisProperties.log": false,
       "mainSeriesProperties.priceAxisProperties.indexedTo100": false,
-      "scalesProperties.showStudyLastValue": false,
-      "scalesProperties.showStudyPlotLabels": false,
+      "scalesProperties.showStudyLastValue": !candlesOnly,
+      "scalesProperties.showStudyPlotLabels": !candlesOnly,
+      "scalesProperties.showSeriesLastValue": true,
+      "scalesProperties.showSymbolLabels": true,
       "paneProperties.background": "#090a08",
       "paneProperties.vertGridProperties.color": "rgba(238, 232, 207, 0.08)",
       "paneProperties.horzGridProperties.color": "rgba(238, 232, 207, 0.08)",
@@ -418,7 +429,11 @@ function bindInteractions() {
   elements.recenterPrice.addEventListener("click", () => {
     state.forceRecentPriceCenter += 1;
     state.autoFitVisibleCandles = true;
+    state.autoScaleCandlesOnly = true;
+    state.fitToVisibleCandles = true;
     elements.autoFitVisibleCandles.checked = true;
+    elements.autoScaleCandlesOnly.checked = true;
+    elements.fitToVisibleCandles.checked = true;
     writePriceAutoFit();
     renderTradingView();
     evaluateAndRender();
@@ -428,6 +443,26 @@ function bindInteractions() {
     state.autoFitVisibleCandles = elements.autoFitVisibleCandles.checked;
     state.forceRecentPriceCenter += 1;
     writePriceAutoFit();
+    evaluateAndRender();
+  });
+
+  elements.autoScaleCandlesOnly.addEventListener("change", () => {
+    state.autoScaleCandlesOnly = elements.autoScaleCandlesOnly.checked;
+    if (state.autoScaleCandlesOnly) {
+      state.autoFitVisibleCandles = true;
+      elements.autoFitVisibleCandles.checked = true;
+    }
+    state.forceRecentPriceCenter += 1;
+    writePriceAutoFit();
+    renderTradingView();
+    evaluateAndRender();
+  });
+
+  elements.fitToVisibleCandles.addEventListener("change", () => {
+    state.fitToVisibleCandles = elements.fitToVisibleCandles.checked;
+    state.forceRecentPriceCenter += 1;
+    writePriceAutoFit();
+    renderTradingView();
     evaluateAndRender();
   });
 
@@ -508,16 +543,26 @@ function writeScoreMinimums() {
 function initPriceAutoFit() {
   try {
     const saved = localStorage.getItem(PRICE_AUTO_FIT_STORAGE_KEY);
+    const candlesOnly = localStorage.getItem(PRICE_CANDLES_ONLY_STORAGE_KEY);
+    const fitVisible = localStorage.getItem(PRICE_FIT_VISIBLE_STORAGE_KEY);
     state.autoFitVisibleCandles = saved === null ? true : saved === "true";
+    state.autoScaleCandlesOnly = candlesOnly === null ? true : candlesOnly === "true";
+    state.fitToVisibleCandles = fitVisible === null ? true : fitVisible === "true";
   } catch {
     state.autoFitVisibleCandles = true;
+    state.autoScaleCandlesOnly = true;
+    state.fitToVisibleCandles = true;
   }
   elements.autoFitVisibleCandles.checked = state.autoFitVisibleCandles;
+  elements.autoScaleCandlesOnly.checked = state.autoScaleCandlesOnly;
+  elements.fitToVisibleCandles.checked = state.fitToVisibleCandles;
 }
 
 function writePriceAutoFit() {
   try {
     localStorage.setItem(PRICE_AUTO_FIT_STORAGE_KEY, String(state.autoFitVisibleCandles));
+    localStorage.setItem(PRICE_CANDLES_ONLY_STORAGE_KEY, String(state.autoScaleCandlesOnly));
+    localStorage.setItem(PRICE_FIT_VISIBLE_STORAGE_KEY, String(state.fitToVisibleCandles));
   } catch {
     // Auto-fit still applies in the current session if storage is blocked.
   }
@@ -1304,7 +1349,7 @@ function drawReplayGrid(ctx, rect) {
 function buildVisiblePriceScale(visibleCandles, allCandles, visibleStartIndex) {
   const visibleHighs = visibleCandles.map((candle) => candle.high).filter(Number.isFinite);
   const visibleLows = visibleCandles.map((candle) => candle.low).filter(Number.isFinite);
-  const indicatorPrices = state.autoFitVisibleCandles ? [] : getVisibleClassicPriceValues(allCandles, visibleStartIndex);
+  const indicatorPrices = state.autoFitVisibleCandles || state.autoScaleCandlesOnly ? [] : getVisibleClassicPriceValues(allCandles, visibleStartIndex);
   const high = Math.max(...visibleHighs, ...indicatorPrices);
   const low = Math.min(...visibleLows, ...indicatorPrices);
   const lastClose = visibleCandles[visibleCandles.length - 1]?.close;
@@ -4352,7 +4397,7 @@ function addPositionToolItem(items, projection, top, sideClass) {
 
 function renderLiveTsrZonesOverlay(candles, topDownAnalysis = { zones: [] }) {
   if (!elements.strategyOverlay) return;
-  if (!state.showTsrChartZones) {
+  if (!state.showTsrChartZones || state.autoScaleCandlesOnly && !state.fitToVisibleCandles) {
     clearStrategyOverlay();
     return;
   }
@@ -4426,7 +4471,9 @@ function isZoneNearLivePrice(zone, scale) {
   if (![top, bottom, scale.currentPrice, scale.range].every(Number.isFinite)) return false;
   const touchesVisibleCandles = top >= scale.candleLow && bottom <= scale.candleHigh;
   const distance = scale.currentPrice > top ? scale.currentPrice - top : scale.currentPrice < bottom ? bottom - scale.currentPrice : 0;
-  const maxDistance = Math.max(1.5, scale.range * LIVE_TSR_ZONE_DISTANCE_RATIO);
+  const distanceRatio = state.autoScaleCandlesOnly ? 0.08 : LIVE_TSR_ZONE_DISTANCE_RATIO;
+  const hardCap = state.autoScaleCandlesOnly ? 6 : Infinity;
+  const maxDistance = Math.min(hardCap, Math.max(1.2, scale.range * distanceRatio));
   return touchesVisibleCandles || distance <= maxDistance;
 }
 

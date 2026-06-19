@@ -347,7 +347,7 @@ button:active {
 .checkbox-list {
   display: grid;
   gap: 14px;
-  max-height: calc(100vh - 385px);
+  max-height: calc(100vh - 455px);
   overflow: auto;
   padding-right: 5px;
 }
