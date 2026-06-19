@@ -827,7 +827,7 @@ async function tsrDataRequest(endpoint, options = {}) {
 function setApiUnavailable(message) {
   state.api.available = false;
   state.api.message = message || API_UNAVAILABLE_MESSAGE;
-  elements.apiNotice.textContent = `${state.api.message} — graphique TradingView direct actif. Les overlays TSR reprendront dès que les bougies API seront disponibles.`;
+  elements.apiNotice.textContent = `${state.api.message} — graphique TradingView direct actif. Les labels TSR restent dans le panneau pour éviter les objets non ancrés au zoom.`;
   elements.apiNotice.hidden = false;
 }
 
@@ -1205,50 +1205,12 @@ function drawLiveTsrOverlay(candles, context, activeResult, entryProjection) {
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   ctx.clearRect(0, 0, rect.width, rect.height);
 
-  const visible = candles.slice(-PRICE_SCALE_VISIBLE_CANDLES);
-  const visibleStartIndex = candles.length - visible.length;
-  const scale = buildVisiblePriceScale(visible, candles, visibleStartIndex);
-  const { max, min } = scale;
-  const priceRange = Math.max(0.0001, max - min);
-  const topPadding = 26;
-  const bottomPadding = 34;
-  const leftPadding = 18;
-  const rightPadding = 92;
-  const plotWidth = Math.max(120, rect.width - leftPadding - rightPadding);
-  const priceToY = (price) => ((max - price) / priceRange) * (rect.height - topPadding - bottomPadding) + topPadding;
-  const candleWidth = Math.max(5, plotWidth / visible.length);
-  const candleToX = (absoluteIndex) => {
-    const localIndex = clamp(absoluteIndex - visibleStartIndex, 0, visible.length - 1);
-    return leftPadding + localIndex * candleWidth + candleWidth / 2;
-  };
-  const geometry = {
-    visible,
-    visibleStartIndex,
-    priceToY,
-    candleToX,
-    leftPadding,
-    rightPadding,
-    topPadding,
-    bottomPadding,
-    candleWidth,
-    plotWidth,
-    plotRight: leftPadding + plotWidth,
-    rect,
-    scale,
-    clampPriceY: (price) => clamp(priceToY(price), topPadding, rect.height - bottomPadding),
-    isPriceNearView: (price) => Number.isFinite(price) && price >= scale.discreetMin && price <= scale.discreetMax,
-    isPriceVisible: (price) => Number.isFinite(price) && price >= min && price <= max,
-  };
-
   state.lastChartRender = { candles, context, activeResult, entryProjection, liveOverlay: true };
   const topDownAnalysis = getTopDownAnalysisForRender(candles, context, activeResult, entryProjection);
   state.topDownZones = topDownAnalysis.zones;
   if (state.selectedZone) state.selectedZone = state.topDownZones.find((zone) => zone.id === state.selectedZone.id) || null;
   state.chartZoneHitboxes = [];
   renderTsrAnalysisPanel(topDownAnalysis);
-
-  drawClassicIndicators(ctx, geometry, candles);
-  drawReplayOverlays(ctx, rect, context, activeResult, geometry, entryProjection, topDownAnalysis);
   renderSelectedZoneInfo();
 }
 
@@ -2018,7 +1980,7 @@ function drawAnchoredSegment(ctx, x1, y1, x2, y2, color, label) {
 function drawReplayEntryProjection(ctx, rect, projection, geometry, sourceZone = null) {
   if (!projection || projection.direction === "WAIT") return;
   const visible = state.smartMoneyVisibility;
-  const { priceToY, candleToX, visibleStartIndex, clampPriceY, isPriceNearView } = geometry;
+  const { isPriceNearView } = geometry;
   const isBuy = projection.direction === "BUY";
   const color = isBuy ? "#46d17b" : "#ef6262";
   const entry = parsePrice(projection.setup.entry);
@@ -2027,28 +1989,26 @@ function drawReplayEntryProjection(ctx, rect, projection, geometry, sourceZone =
   const entryNear = isPriceNearView(entry);
   const slNear = isPriceNearView(sl);
   const tp1Near = isPriceNearView(tp1);
-  const zoneY = entryNear ? clampPriceY(entry) : isBuy ? rect.height * 0.58 : rect.height * 0.28;
-  const slY = slNear ? clampPriceY(sl) : zoneY + (isBuy ? 44 : -44);
-  const zoneTop = Number.isFinite(sl) ? Math.min(zoneY, slY) : zoneY;
-  const zoneHeight = Number.isFinite(sl) ? Math.min(160, Math.max(32, Math.abs(slY - zoneY))) : 48;
-  const zoneLeft = candleToX(visibleStartIndex + Math.max(6, geometry.visible.length - 18));
+  const signalBarIndex = getSignalAnchorBarIndex(geometry);
   const stageRank = { future: 1, potential: 2, imminent: 3, confirmed: 4 }[projection.stage] || 0;
   if (stageRank < 4 || !visible.confirmedSignals) return;
   const projectionNearView = !Number.isFinite(entry) || entryNear || slNear || tp1Near;
-  if (!projectionNearView) {
-    drawReplayLabel(ctx, zoneLeft, isBuy ? rect.height - 62 : 34, `${projection.direction} hors echelle visible`, color);
-    return;
-  }
+  if (!projectionNearView) return;
 
-  drawReplayLabel(ctx, zoneLeft + 8, Number.isFinite(tp1) ? priceToY(tp1) - 24 : zoneTop + zoneHeight + 68, `${projection.direction} confirmé`, color);
+  drawAnchoredLabel(ctx, geometry, {
+    barIndex: signalBarIndex,
+    price: Number.isFinite(tp1) ? tp1 : entry,
+    label: `${projection.direction} confirmé`,
+    color,
+    yOffset: Number.isFinite(tp1) ? -24 : isBuy ? -42 : 42,
+  });
 
   const showPositionTool = stageRank >= 4 && ((isBuy && visible.longPositionTool) || (!isBuy && visible.shortPositionTool));
-  if (showPositionTool) drawReplayPositionTool(ctx, rect, projection, geometry, color);
+  if (showPositionTool) drawReplayPositionTool(ctx, rect, projection, geometry, color, signalBarIndex);
 }
 
-function drawReplayPositionTool(ctx, rect, projection, geometry, color) {
+function drawReplayPositionTool(ctx, rect, projection, geometry, color, signalBarIndex) {
   const visible = state.smartMoneyVisibility;
-  const { priceToY, clampPriceY, isPriceNearView } = geometry;
   const setup = projection.setup;
   const entry = parsePrice(setup.entry);
   const sl = parsePrice(setup.sl);
@@ -2057,17 +2017,41 @@ function drawReplayPositionTool(ctx, rect, projection, geometry, color) {
   const tp3 = parsePrice(setup.tp3);
   if (![entry, sl, tp1, tp2, tp3].every(Number.isFinite)) return;
 
-  drawReplayLine(ctx, priceToY(entry), "#e7b84e", `Entrée ${setup.entryRange || setup.entry}`, rect);
+  drawAnchoredPriceLine(ctx, geometry, { price: entry, barIndex: signalBarIndex, color: "#e7b84e", label: `Entrée ${setup.entryRange || setup.entry}` });
   if (visible.slTp) {
-    drawReplayLine(ctx, priceToY(sl), "#ef6262", `SL ${setup.sl} · ${projection.metrics.riskPoints}`, rect);
-    drawReplayLine(ctx, priceToY(tp1), "#46d17b", `TP1 ${setup.tp1} · ${projection.metrics.tp1Points}`, rect);
-    drawReplayLine(ctx, priceToY(tp2), "#46d17b", `TP2 ${setup.tp2} · ${projection.metrics.tp2Points}`, rect);
-    drawReplayLine(ctx, priceToY(tp3), "#46d17b", `TP3 ${setup.tp3} · ${projection.metrics.tp3Points}`, rect);
+    drawAnchoredPriceLine(ctx, geometry, { price: sl, barIndex: signalBarIndex, color: "#ef6262", label: `SL ${setup.sl} · ${projection.metrics.riskPoints}` });
+    drawAnchoredPriceLine(ctx, geometry, { price: tp1, barIndex: signalBarIndex, color: "#46d17b", label: `TP1 ${setup.tp1} · ${projection.metrics.tp1Points}` });
+    drawAnchoredPriceLine(ctx, geometry, { price: tp2, barIndex: signalBarIndex, color: "#46d17b", label: `TP2 ${setup.tp2} · ${projection.metrics.tp2Points}` });
+    drawAnchoredPriceLine(ctx, geometry, { price: tp3, barIndex: signalBarIndex, color: "#46d17b", label: `TP3 ${setup.tp3} · ${projection.metrics.tp3Points}` });
   }
   const label = visible.riskReward
     ? `${projection.direction === "BUY" ? "Position longue" : "Position courte"} · RR ${projection.metrics.rr1}/${projection.metrics.rr2}/${projection.metrics.rr3} · ${projection.metrics.status}`
     : `${projection.direction === "BUY" ? "Position longue" : "Position courte"} · ${projection.metrics.status}`;
-  drawReplayLabel(ctx, rect.width * 0.66, priceToY(entry) - 34, label, color);
+  drawAnchoredLabel(ctx, geometry, { barIndex: signalBarIndex, price: entry, label, color, yOffset: -34 });
+}
+
+function getSignalAnchorBarIndex(geometry) {
+  return geometry.visibleStartIndex + Math.max(0, geometry.visible.length - 1);
+}
+
+function drawAnchoredPriceLine(ctx, geometry, anchor) {
+  const y = geometry.priceToY(anchor.price);
+  if (!Number.isFinite(y) || y < -20 || y > geometry.rect.height + 20) return;
+  const safeY = clamp(y, geometry.topPadding, geometry.rect.height - geometry.bottomPadding);
+  ctx.strokeStyle = anchor.color;
+  ctx.fillStyle = anchor.color;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(geometry.leftPadding, safeY);
+  ctx.lineTo(geometry.plotRight, safeY);
+  ctx.stroke();
+  drawAnchoredLabel(ctx, geometry, {
+    barIndex: anchor.barIndex,
+    price: anchor.price,
+    label: anchor.label,
+    color: anchor.color,
+    yOffset: -22,
+  });
 }
 
 function drawReplayLine(ctx, y, color, label, rect) {
@@ -2082,6 +2066,21 @@ function drawReplayLine(ctx, y, color, label, rect) {
   ctx.stroke();
   ctx.font = "11px ui-monospace, monospace";
   ctx.fillText(label, 12, safeY - 5);
+}
+
+function drawAnchoredLabel(ctx, geometry, anchor) {
+  if (!isChartAnchorVisible(geometry, anchor)) return;
+  const x = geometry.candleToX(anchor.barIndex);
+  const y = geometry.priceToY(anchor.price) + (anchor.yOffset || 0);
+  drawReplayLabel(ctx, x, y, anchor.label, anchor.color);
+}
+
+function isChartAnchorVisible(geometry, anchor) {
+  const lastVisibleIndex = geometry.visibleStartIndex + geometry.visible.length - 1;
+  return Number.isFinite(anchor.price)
+    && anchor.barIndex >= geometry.visibleStartIndex
+    && anchor.barIndex <= lastVisibleIndex
+    && geometry.isPriceVisible(anchor.price);
 }
 
 function drawReplayLabel(ctx, x, y, label, color) {
@@ -2621,7 +2620,7 @@ function renderNoLiveCandlesState(session, market, news, zones) {
     blockingReason: "Bougies TSR indisponibles, graphique TradingView direct actif",
     confirmationSummary: "Analyse TSR suspendue tant que /history ne renvoie pas de bougies",
     reason: "Aucun trade qualifié — TradingView direct affiché en attendant les bougies TSR.",
-    badges: [["TradingView direct", "pending"], ["Overlays TSR en attente", "risk"]],
+    badges: [["TradingView direct", "pending"], ["Labels TSR dans le panneau", "risk"]],
     blocks: [
       ["Météo du marché", false, "Indisponible sans bougies live"],
       ["Zones clés", false, "Aucune zone calculée sans données OHLC réelles"],
@@ -2636,7 +2635,7 @@ function renderNoLiveCandlesState(session, market, news, zones) {
     setup,
     metrics: buildPositionMetrics("WAIT", setup, "none", []),
     statusLabel: "Aucun trade qualifié",
-    reason: "Graphique TradingView direct actif — les overlays TSR reprendront quand /history renverra des bougies.",
+    reason: "Graphique TradingView direct actif — les labels TSR ne sont pas dessinés en live pour éviter les objets figés au zoom.",
   };
 
   elements.sessionName.textContent = session.name;
@@ -3938,8 +3937,8 @@ function renderRiskRewardDetails(riskReward) {
 function renderChartSignalAlert(activeResult, entryProjection) {
   const direction = activeResult.status;
   const confirmed = direction === "BUY" || direction === "SELL";
-  elements.chartSignalAlert.classList.toggle("hidden", !confirmed);
-  elements.chartDecisionCard.classList.toggle("hidden", !confirmed);
+  elements.chartSignalAlert.classList.add("hidden");
+  elements.chartDecisionCard.classList.add("hidden");
   if (!confirmed) return;
   elements.chartSignalAlert.classList.toggle("buy", direction === "BUY");
   elements.chartSignalAlert.classList.toggle("sell", direction === "SELL");
@@ -4150,6 +4149,7 @@ function renderTsrAnalysisPanel(topDownAnalysis = { zones: [] }) {
 function renderTsrAnalysisZoneButton(zone) {
   const selected = state.selectedZone?.id === zone.id ? " selected" : "";
   const previewActive = isChartPreviewActive(zone.id);
+  const liveTradingView = state.lastChartRender?.liveOverlay && !state.replay.active;
   const priceRange = `${formatPrice(Math.min(zone.top, zone.bottom))} - ${formatPrice(Math.max(zone.top, zone.bottom))}`;
   const typeLabel = zone.type === "Liquidite" ? "Liquidité" : zone.type;
   const statusLabel = zone.type === "OB" && zone.state ? zone.state : zone.status;
@@ -4160,7 +4160,7 @@ function renderTsrAnalysisZoneButton(zone) {
       <small>Type : ${typeLabel} · Prix : ${priceRange}</small>
       <small>Score : ${zone.score}/100 · ${zone.reason}</small>
       <button type="button" class="tsr-zone-preview-button${previewActive ? " active" : ""}" data-preview-zone-id="${zone.id}">
-        ${previewActive ? "Masquer" : "Voir sur graphique"}
+        ${liveTradingView ? "Voir détails" : previewActive ? "Masquer" : "Voir sur graphique"}
       </button>
     </article>
   `;
@@ -4187,6 +4187,13 @@ function previewTsrAnalysisZone(zoneId) {
   const zone = state.topDownZones.find((item) => item.id === zoneId);
   if (!zone) return;
   state.selectedZone = zone;
+  const latest = state.lastChartRender;
+  if (latest?.liveOverlay && !state.replay.active) {
+    clearChartPreviewZone(false);
+    renderSelectedZoneInfo();
+    renderTsrAnalysisPanel({ zones: state.topDownZones });
+    return;
+  }
   if (isChartPreviewActive(zoneId)) {
     clearChartPreviewZone(true);
     return;
