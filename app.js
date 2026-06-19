@@ -65,9 +65,9 @@ const OB_ANALYSIS_TIMEFRAMES = [
   { label: "D1", group: 96, weight: 25 },
   { label: "H4", group: 72, weight: 25 },
   { label: "H1", group: 54, weight: 20 },
-  { label: "M15", group: 28, weight: 10 },
-  { label: "M5", group: 16, weight: 8 },
-  { label: "M1", group: 10, weight: 6 },
+  { label: "M15", group: 48, weight: 10 },
+  { label: "M5", group: 36, weight: 8 },
+  { label: "M1", group: 28, weight: 7 },
 ];
 
 const state = {
@@ -3129,8 +3129,11 @@ function detectMultiTimeframeOrderBlocks(candles, last) {
     const segment = candles.slice(-Math.min(candles.length, timeframe.group));
     if (segment.length < 8) return;
     ["BUY", "SELL"].forEach((direction) => {
-      const block = findOrderBlockCandidate(segment, candles.length - segment.length, timeframe, direction, last);
-      if (block) blocks.push(block);
+      const startIndex = candles.length - segment.length;
+      const candidates = timeframe.label === "M1" || timeframe.label === "M5"
+        ? findOrderBlockCandidates(segment, startIndex, timeframe, direction, last, 5)
+        : findOrderBlockCandidates(segment, startIndex, timeframe, direction, last, timeframe.label === "M15" ? 2 : 1);
+      blocks.push(...candidates);
     });
   });
   return blocks.sort((a, b) => b.score - a.score);
@@ -3143,7 +3146,8 @@ function buildSmartMoneyTsrChecklist(context) {
   const cleanBlocks = getCleanSmartMoneyOrderBlocks(orderBlocks, candidateDirection, candles.length);
   const activeOb = cleanBlocks[0] || null;
   const liquidityReview = getSmartMoneyLiquidityReview(candidateDirection, liquidity, zones);
-  const bosChoch = Boolean(confirmation.choch || advancedSmc.bosDisplacement);
+  const microBos = Boolean(activeOb && (activeOb.timeframe === "M1" || activeOb.timeframe === "M5") && (activeOb.executionScore || activeOb.score || 0) >= 20);
+  const bosChoch = Boolean(confirmation.choch || advancedSmc.bosDisplacement || microBos);
   const retest = getSmartMoneyRetestReview(candidateDirection, activeOb, advancedSmc, zones);
   const priceAction = getSmartMoneyPriceActionReview(candidateDirection, candleScan);
   const rsi = candidateDirection === "BUY" ? buyRsi : candidateDirection === "SELL" ? sellRsi : { value: 50, valid: false, label: "RSI neutre" };
@@ -3156,9 +3160,9 @@ function buildSmartMoneyTsrChecklist(context) {
   const checks = [
     { key: "h1", valid: candidateDirection !== "WAIT", reason: h1.label },
     { key: "structure", valid: structureTrend.bias === candidateDirection && candidateDirection !== "WAIT", reason: `${structureTrend.label} · ${structureTrend.reason}` },
-    { key: "ob", valid: Boolean(activeOb), reason: activeOb ? `OB ${activeOb.timeframe} propre ${activeOb.state}` : "Aucun OB H1/M15 propre" },
+    { key: "ob", valid: Boolean(activeOb), reason: activeOb ? `OB ${activeOb.timeframe} propre ${activeOb.state}` : "Aucun OB H1/M15/M5/M1 propre" },
     { key: "liquidity", valid: liquidityReview.valid, reason: liquidityReview.reason },
-    { key: "bos", valid: bosChoch, reason: bosChoch ? "BOS/CHoCH confirme" : "BOS/CHoCH non confirme" },
+    { key: "bos", valid: bosChoch, reason: bosChoch ? microBos ? "Micro BOS/displacement M1-M5 confirme" : "BOS/CHoCH confirme" : "BOS/CHoCH non confirme" },
     { key: "retest", valid: retest.valid, reason: retest.reason },
     { key: "priceAction", valid: priceAction.valid, reason: priceAction.reason },
     { key: "rsi", valid: rsiFilterOk, reason: rsiFilterOk ? `RSI filtre OK (${rsi.value})` : `RSI filtre prudent (${rsi.value})` },
@@ -3170,7 +3174,7 @@ function buildSmartMoneyTsrChecklist(context) {
   const confidence = clamp(Math.round(
     (signalReady ? 62 : 34)
     + checks.filter((check) => check.valid).length * 4
-    + (activeOb?.timeframe === "H1" ? 8 : activeOb?.timeframe === "M15" ? 5 : 0)
+    + (activeOb?.timeframe === "H1" ? 8 : activeOb?.timeframe === "M15" ? 6 : activeOb?.timeframe === "M5" ? 5 : activeOb?.timeframe === "M1" ? 4 : 0)
     + (advancedSmc.bosDisplacement ? 5 : 0)
     + (rsi.valid ? 3 : 0)
     + confidenceBase * 0.12,
@@ -3186,6 +3190,7 @@ function buildSmartMoneyTsrChecklist(context) {
     cleanBlocks,
     liquidityReview,
     bosChoch,
+    microBos,
     retest,
     priceAction,
     rsiFilterOk,
@@ -3215,15 +3220,16 @@ function getCleanSmartMoneyOrderBlocks(orderBlocks, direction, candleCount) {
   if (direction !== "BUY" && direction !== "SELL") return [];
   return orderBlocks
     .filter((block) => block.direction === direction)
-    .filter((block) => block.timeframe === "H1" || block.timeframe === "M15")
+    .filter((block) => block.timeframe === "H1" || block.timeframe === "M15" || block.timeframe === "M5" || block.timeframe === "M1")
     .filter((block) => block.state === "Active")
     .filter((block) => !block.mitigated && !block.broken && !block.invalid)
     .filter((block) => {
       const age = candleCount - (block.startIndex || 0);
-      const maxAge = block.timeframe === "H1" ? 88 : 46;
+      const maxAge = block.timeframe === "H1" ? 88 : block.timeframe === "M15" ? 52 : block.timeframe === "M5" ? 34 : 22;
       return age <= maxAge;
     })
-    .filter((block) => (block.executionScore || block.score || 0) >= 20)
+    .filter((block) => block.timeframe === "H1" || block.timeframe === "M15" || block.executionNear || block.reacted || block.inside)
+    .filter((block) => (block.executionScore || block.score || 0) >= (block.timeframe === "M1" ? 12 : block.timeframe === "M5" ? 14 : 20))
     .sort((a, b) => getExecutionBlockRank(b) - getExecutionBlockRank(a));
 }
 
@@ -3306,17 +3312,40 @@ function getExecutionBlockRank(block) {
   return (block.executionScore || block.score || 0) + timeframeBonus - distancePenalty;
 }
 
-function findOrderBlockCandidate(segment, startIndex, timeframe, direction, last) {
-  const impulse = findDisplacementCandle(segment, direction);
-  if (!impulse) return null;
-  const search = segment.slice(0, Math.max(0, impulse.index));
-  const opposite = direction === "BUY"
-    ? findLastCandle(search, (candle) => candle.close < candle.open)
-    : findLastCandle(search, (candle) => candle.close > candle.open);
-  if (!opposite) return null;
-  const height = Math.max(opposite.candle.high - opposite.candle.low, Math.abs(opposite.candle.close - opposite.candle.open), 0.5);
-  const top = Math.max(opposite.candle.open, opposite.candle.close) + height * 0.14;
-  const bottom = Math.min(opposite.candle.open, opposite.candle.close) - height * 0.14;
+function findOrderBlockCandidates(segment, startIndex, timeframe, direction, last, limit = 1) {
+  const candidates = [];
+  const seen = new Set();
+  for (let index = segment.length - 1; index >= 2 && candidates.length < limit; index -= 1) {
+    const scan = scanCandle(segment, index);
+    if (!scan || !isDisplacementForDirection(scan, direction)) continue;
+    const search = segment.slice(Math.max(0, index - 8), index);
+    const opposite = direction === "BUY"
+      ? findLastCandle(search, (candle) => candle.close < candle.open)
+      : findLastCandle(search, (candle) => candle.close > candle.open);
+    if (!opposite) continue;
+    const absoluteOppositeIndex = startIndex + Math.max(0, index - 8) + opposite.index;
+    const block = createOrderBlockFromCandle(opposite.candle, absoluteOppositeIndex, timeframe, direction, last, scan);
+    if (!block) continue;
+    const key = `${block.timeframe}-${block.direction}-${Math.round(block.top * 10)}-${Math.round(block.bottom * 10)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push(block);
+  }
+  return candidates;
+}
+
+function isDisplacementForDirection(scan, direction) {
+  if (direction === "BUY") return scan.detections.bullishImpulse || scan.detections.displacement && scan.close > scan.open || scan.bodyRatio >= 0.5 && scan.closePosition >= 0.68;
+  if (direction === "SELL") return scan.detections.bearishImpulse || scan.detections.displacement && scan.close < scan.open || scan.bodyRatio >= 0.5 && scan.closePosition <= 0.32;
+  return false;
+}
+
+function createOrderBlockFromCandle(candle, absoluteIndex, timeframe, direction, last, impulseScan) {
+  const height = Math.max(candle.high - candle.low, Math.abs(candle.close - candle.open), 0.35);
+  const isExecutionTf = timeframe.label === "M1" || timeframe.label === "M5";
+  const pad = isExecutionTf ? height * 0.08 : height * 0.14;
+  const top = Math.max(candle.open, candle.close) + pad;
+  const bottom = Math.min(candle.open, candle.close) - pad;
   const stateInfo = classifyOrderBlockState(direction, top, bottom, last);
   return {
     type: "OB",
@@ -3331,10 +3360,21 @@ function findOrderBlockCandidate(segment, startIndex, timeframe, direction, last
     mitigated: stateInfo.state === "Mitigated",
     broken: stateInfo.state === "Broken",
     invalid: stateInfo.state === "Invalid",
-    score: clamp(timeframe.weight + (stateInfo.inside ? 20 : stateInfo.near ? 12 : 0) + (stateInfo.reacted ? 15 : 0) + (impulse.scan.detections.displacement ? 8 : 0), 0, 100),
+    score: clamp(timeframe.weight + (stateInfo.inside ? 24 : stateInfo.near ? 15 : 0) + (stateInfo.reacted ? 18 : 0) + (impulseScan?.detections?.displacement ? 8 : 0), 0, 100),
     reason: `OB ${timeframe.label} ${direction} ${stateInfo.state}`,
-    startIndex: startIndex + opposite.index,
+    startIndex: absoluteIndex,
   };
+}
+
+function findOrderBlockCandidate(segment, startIndex, timeframe, direction, last) {
+  const impulse = findDisplacementCandle(segment, direction);
+  if (!impulse) return null;
+  const search = segment.slice(0, Math.max(0, impulse.index));
+  const opposite = direction === "BUY"
+    ? findLastCandle(search, (candle) => candle.close < candle.open)
+    : findLastCandle(search, (candle) => candle.close > candle.open);
+  if (!opposite) return null;
+  return createOrderBlockFromCandle(opposite.candle, startIndex + opposite.index, timeframe, direction, last, impulse.scan);
 }
 
 function classifyOrderBlockState(direction, top, bottom, last) {
@@ -3778,6 +3818,7 @@ function buildSmartMoneyAnalysis(session, market, news, zones, confirmation, can
       ["Direction H1", scalpModel.smartChecklist.candidateDirection !== "WAIT", scalpModel.smartChecklist.h1.label],
       ["Structure marché", scalpModel.smartChecklist.checks.find((check) => check.key === "structure")?.valid, scalpModel.smartChecklist.checks.find((check) => check.key === "structure")?.reason],
       ["OB actif", Boolean(scalpModel.bestBlock), scalpModel.bestBlock ? `OB ${scalpModel.bestBlock.timeframe} ${scalpModel.bestBlock.direction} propre` : scalpModel.smartChecklist.waitReason],
+      ["OB scalping M1/M5", scalpModel.smartChecklist.cleanBlocks.some((block) => block.timeframe === "M1" || block.timeframe === "M5"), scalpModel.smartChecklist.cleanBlocks.filter((block) => block.timeframe === "M1" || block.timeframe === "M5").slice(0, 3).map((block) => `${block.timeframe} ${block.direction} ${formatDistance(block.distanceToPrice)} pts`).join(", ") || "Aucun OB M1/M5 proche"],
       ["Liquidité détectée", scalpModel.smartChecklist.liquidityReview.valid, scalpModel.smartChecklist.liquidityReview.reason],
       ["BOS / CHoCH", scalpModel.smartChecklist.bosChoch, scalpModel.smartChecklist.bosChoch ? "Confirmé" : "Non confirmé"],
       ["Zone d'entrée", scalpModel.smartChecklist.retest.valid, scalpModel.smartChecklist.retest.reason],
