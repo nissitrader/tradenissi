@@ -70,6 +70,7 @@ const state = {
   analysisMode: "smart",
   showBothAnalyses: false,
   autoFitVisibleCandles: true,
+  showTsrChartZones: true,
   forceRecentPriceCenter: 0,
   riskRewardMinimum: RISK_REWARD_DEFAULT_MINIMUM,
   scoreMinimums: {
@@ -151,6 +152,7 @@ const elements = {
   chartDecisionFill: document.getElementById("chartDecisionFill"),
   chartDecisionScore: document.getElementById("chartDecisionScore"),
   resetSignalPositions: document.getElementById("resetSignalPositions"),
+  toggleTsrZones: document.getElementById("toggleTsrZones"),
   recenterPrice: document.getElementById("recenterPrice"),
   autoFitVisibleCandles: document.getElementById("autoFitVisibleCandles"),
   riskRewardMinimum: document.getElementById("riskRewardMinimum"),
@@ -385,6 +387,12 @@ function bindInteractions() {
 
   document.getElementById("chartScale").addEventListener("input", (event) => {
     elements.workspace.style.gridTemplateColumns = `var(--left-width) ${event.target.value}fr var(--right-width)`;
+  });
+
+  elements.toggleTsrZones?.addEventListener("click", () => {
+    state.showTsrChartZones = !state.showTsrChartZones;
+    elements.toggleTsrZones.classList.toggle("active", state.showTsrChartZones);
+    evaluateAndRender();
   });
 
   elements.recenterPrice.addEventListener("click", () => {
@@ -1216,6 +1224,7 @@ function drawLiveTsrOverlay(candles, context, activeResult, entryProjection) {
   if (state.selectedZone) state.selectedZone = state.topDownZones.find((zone) => zone.id === state.selectedZone.id) || null;
   state.chartZoneHitboxes = [];
   renderTsrAnalysisPanel(topDownAnalysis);
+  renderLiveTsrZonesOverlay(candles, topDownAnalysis);
   renderSelectedZoneInfo();
 }
 
@@ -4125,6 +4134,106 @@ function addPositionToolItem(items, projection, top, sideClass) {
   });
 }
 
+function renderLiveTsrZonesOverlay(candles, topDownAnalysis = { zones: [] }) {
+  if (!elements.strategyOverlay) return;
+  if (!state.showTsrChartZones) {
+    clearStrategyOverlay();
+    return;
+  }
+  const zones = (topDownAnalysis.zones || [])
+    .filter(shouldShowLiveTsrZone)
+    .sort((a, b) => getLiveZonePriority(b) - getLiveZonePriority(a))
+    .slice(0, 14);
+  if (!candles.length || !zones.length) {
+    clearStrategyOverlay();
+    return;
+  }
+
+  const scale = getLiveOverlayPriceScale(candles, zones);
+  if (!scale) {
+    clearStrategyOverlay();
+    return;
+  }
+
+  const rows = zones
+    .map((zone) => renderLiveTsrZone(zone, scale))
+    .filter(Boolean)
+    .join("");
+
+  elements.strategyOverlay.innerHTML = `
+    <div class="tsr-live-zone-badge">Order Blocks / FVG / Liquidité</div>
+    ${rows}
+  `;
+}
+
+function shouldShowLiveTsrZone(zone) {
+  if (zone.status === "invalidée") return false;
+  const visible = state.smartMoneyVisibility;
+  if (zone.type === "OB") return visible.orderBlocks;
+  if (zone.type === "FVG") return visible.fvg;
+  if (zone.type === "OTE") return visible.ote || visible.premiumDiscount;
+  if (zone.type === "Liquidite") return visible.equalHigh || visible.equalLow || visible.liquiditySweep || visible.previousHL;
+  return false;
+}
+
+function getLiveZonePriority(zone) {
+  const typeScore = zone.type === "OB" ? 34 : zone.type === "FVG" ? 26 : zone.type === "Liquidite" ? 22 : 14;
+  const statusScore = zone.status === "signal confirmé" ? 40 : zone.status === "entrée imminente" ? 30 : zone.status === "entrée potentielle" ? 18 : 8;
+  return typeScore + statusScore + Math.round((zone.score || 0) * 0.35);
+}
+
+function getLiveOverlayPriceScale(candles, zones) {
+  const visible = candles.slice(-PRICE_SCALE_VISIBLE_CANDLES);
+  if (!visible.length) return null;
+  const candleHigh = Math.max(...visible.map((candle) => candle.high).filter(Number.isFinite));
+  const candleLow = Math.min(...visible.map((candle) => candle.low).filter(Number.isFinite));
+  const rawHigh = candleHigh;
+  const rawLow = candleLow;
+  if (!Number.isFinite(rawHigh) || !Number.isFinite(rawLow) || rawHigh <= rawLow) return null;
+  const range = rawHigh - rawLow;
+  const padding = Math.max(0.8, range * 0.08);
+  return { high: rawHigh + padding, low: rawLow - padding };
+}
+
+function renderLiveTsrZone(zone, scale) {
+  const topPrice = Math.max(zone.top, zone.bottom);
+  const bottomPrice = Math.min(zone.top, zone.bottom);
+  const top = priceToLiveOverlayPercent(topPrice, scale);
+  const bottom = priceToLiveOverlayPercent(bottomPrice, scale);
+  if (![top, bottom].every(Number.isFinite)) return "";
+  if (Math.max(top, bottom) < -8 || Math.min(top, bottom) > 108) return "";
+  const y = clamp(Math.min(top, bottom), 2, 96);
+  const height = clamp(Math.abs(bottom - top), 1.2, 18);
+  const className = getLiveTsrZoneClass(zone);
+  const label = getLiveTsrZoneLabel(zone);
+  const priceLabel = `${formatPrice(bottomPrice)} - ${formatPrice(topPrice)}`;
+
+  return `
+    <div class="tsr-live-zone ${className}" style="top:${y}%; height:${height}%;">
+      <span>${label}</span>
+      <strong>${priceLabel}</strong>
+    </div>
+  `;
+}
+
+function priceToLiveOverlayPercent(price, scale) {
+  return ((scale.high - price) / Math.max(0.0001, scale.high - scale.low)) * 100;
+}
+
+function getLiveTsrZoneClass(zone) {
+  if (zone.type === "OB") return zone.direction === "BUY" ? "tsr-zone-buy" : "tsr-zone-sell";
+  if (zone.type === "FVG") return "tsr-zone-fvg";
+  if (zone.type === "Liquidite") return "tsr-zone-liquidity";
+  if (zone.type === "OTE") return "tsr-zone-ote";
+  return "tsr-zone-neutral";
+}
+
+function getLiveTsrZoneLabel(zone) {
+  const type = zone.type === "Liquidite" ? "Liquidité" : zone.type;
+  const state = zone.type === "OB" && zone.state ? ` · ${zone.state}` : "";
+  return `${type} ${zone.timeframe} ${zone.direction}${state}`;
+}
+
 function renderStrategyOverlay(direction, zones, confirmation, entryProjection) {
   clearStrategyOverlay();
 }
@@ -4268,12 +4377,12 @@ function handleChartZoneClick(event) {
 }
 
 function renderSelectedZoneInfo() {
+  elements.strategyOverlay.querySelector(".zone-info-card")?.remove();
   if (!state.selectedZone) {
-    elements.strategyOverlay.innerHTML = "";
     return;
   }
   const zone = state.selectedZone;
-  elements.strategyOverlay.innerHTML = `
+  elements.strategyOverlay.insertAdjacentHTML("beforeend", `
     <article class="zone-info-card">
       <button type="button" class="zone-info-close" aria-label="Fermer">x</button>
       <strong>${zone.label}</strong>
@@ -4287,7 +4396,7 @@ function renderSelectedZoneInfo() {
         <dt>TP1 / TP2 / TP3</dt><dd>${zone.tp1} / ${zone.tp2} / ${zone.tp3}</dd>
       </dl>
     </article>
-  `;
+  `);
   elements.strategyOverlay.querySelector(".zone-info-close")?.addEventListener("click", () => {
     state.selectedZone = null;
     renderSelectedZoneInfo();
