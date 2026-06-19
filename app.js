@@ -46,8 +46,8 @@ const PRICE_SCALE_VISIBLE_CANDLES = 56;
 const PRICE_SCALE_MARGIN_RATIO = 0.1;
 const LIVE_TSR_ZONE_DISTANCE_RATIO = 0.22;
 const LIVE_TSR_ZONE_LIMIT = 5;
-const SCALPING_EXECUTION_DISTANCE_CAP = 12;
-const SCALPING_EXECUTION_DISTANCE_RATIO = 0.2;
+const SCALPING_EXECUTION_DISTANCE_CAP = 18;
+const SCALPING_EXECUTION_DISTANCE_RATIO = 0.34;
 const TOP_DOWN_TIMEFRAMES = [
   { label: "Mensuel", group: 180, weight: 24, role: "historique large" },
   { label: "Weekly", group: 132, weight: 22, role: "liquidite majeure" },
@@ -270,6 +270,8 @@ function renderTradingView() {
       "symbol_search_hot_key",
       "compare_symbol",
       "display_market_status",
+      "use_localstorage_for_settings",
+      "save_chart_properties_to_local_storage",
     ],
     support_host: "https://www.tradingview.com",
     container_id: "tradingview_chart",
@@ -282,6 +284,13 @@ function renderTradingView() {
       "mainSeriesProperties.candleStyle.wickDownColor": "#ff5b5b",
       "mainSeriesProperties.candleStyle.drawWick": true,
       "mainSeriesProperties.candleStyle.drawBorder": true,
+      "mainSeriesProperties.priceAxisProperties.autoScale": true,
+      "mainSeriesProperties.priceAxisProperties.lockScale": false,
+      "mainSeriesProperties.priceAxisProperties.percentage": false,
+      "mainSeriesProperties.priceAxisProperties.log": false,
+      "mainSeriesProperties.priceAxisProperties.indexedTo100": false,
+      "scalesProperties.showStudyLastValue": false,
+      "scalesProperties.showStudyPlotLabels": false,
       "paneProperties.background": "#090a08",
       "paneProperties.vertGridProperties.color": "rgba(238, 232, 207, 0.08)",
       "paneProperties.horzGridProperties.color": "rgba(238, 232, 207, 0.08)",
@@ -3023,7 +3032,16 @@ function buildScalpingDecisionModel(candles, market, zones, confirmation, candle
   const executionBlocks = directionalBlocks.filter((block) => block.executionNear);
   const contextBlock = directionalBlocks.sort((a, b) => b.score - a.score)[0] || null;
   const bestBlock = executionBlocks.sort((a, b) => getExecutionBlockRank(b) - getExecutionBlockRank(a))[0] || null;
+  const fallbackTrigger = direction !== "WAIT" && !bestBlock
+    ? getNearbyScalpingTrigger(direction, { liquidity, structureTrend, confirmation, candleScan, advancedSmc })
+    : null;
+  const executionSetup = bestBlock && direction !== "WAIT"
+    ? buildOrderBlockSetup(direction, bestBlock, last)
+    : fallbackTrigger
+      ? buildNearbyScalpingSetup(direction, last, usable, fallbackTrigger)
+      : null;
   const reasons = direction === "BUY" ? buyScore.reasons : direction === "SELL" ? sellScore.reasons : [...buyScore.reasons, ...sellScore.reasons].slice(0, 4);
+  if (fallbackTrigger) reasons.unshift(fallbackTrigger.reason);
 
   return {
     direction,
@@ -3039,9 +3057,11 @@ function buildScalpingDecisionModel(candles, market, zones, confirmation, candle
     activeOrderBlocks: activeBlocks,
     bestBlock,
     contextBlock,
+    fallbackTrigger,
+    executionSetup,
     executionDistanceLimit: getScalpingExecutionDistanceLimit(usable, last),
     liquidity,
-    setup: bestBlock && direction !== "WAIT" ? buildOrderBlockSetup(direction, bestBlock, last) : null,
+    setup: executionSetup,
     summary: `BUY ${buyScore.total}/100 · SELL ${sellScore.total}/100 · tendance ${structureTrend.label}`,
   };
 }
@@ -3108,6 +3128,54 @@ function getExecutionBlockRank(block) {
   const timeframeBonus = block.timeframe === "M1" ? 16 : block.timeframe === "M5" ? 14 : block.timeframe === "M15" ? 12 : block.timeframe === "H1" ? 8 : 4;
   const distancePenalty = Math.round((block.distanceToPrice || 0) * 2);
   return (block.executionScore || block.score || 0) + timeframeBonus - distancePenalty;
+}
+
+function getNearbyScalpingTrigger(direction, context) {
+  const { liquidity, structureTrend, confirmation, candleScan, advancedSmc } = context;
+  const candleOk = Boolean(candleScan.valid || candleScan.current?.detections?.wickRejection || candleScan.current?.detections?.displacement);
+  const trendOk = structureTrend.bias === direction || structureTrend.bias === "WAIT";
+  const liquiditySweep = direction === "BUY" ? liquidity.sellSideSweep : liquidity.buySideSweep;
+  const liquidityNear = direction === "BUY" ? liquidity.sellSideNear : liquidity.buySideNear;
+  const structureImpulse = Boolean(confirmation.choch || advancedSmc?.bosDisplacement || advancedSmc?.fvgPresent);
+
+  if (liquiditySweep && candleOk) {
+    return { strength: 3, reason: "Entrée scalping proche : liquidité balayée + réaction bougie" };
+  }
+  if (trendOk && candleOk && structureImpulse) {
+    return { strength: 2, reason: "Entrée scalping proche : tendance + impulsion actuelle" };
+  }
+  if (trendOk && candleOk && liquidityNear) {
+    return { strength: 1, reason: "Entrée scalping proche : prix proche liquidité + bougie exploitable" };
+  }
+  return null;
+}
+
+function buildNearbyScalpingSetup(direction, last, candles, trigger) {
+  const entry = Number(last?.close);
+  if (!Number.isFinite(entry)) return null;
+  const recent = candles.slice(-12);
+  const recentHigh = recent.length ? Math.max(...recent.map((candle) => candle.high)) : Number(last.high);
+  const recentLow = recent.length ? Math.min(...recent.map((candle) => candle.low)) : Number(last.low);
+  const candleRange = Math.max(0.6, Number(last.high) - Number(last.low));
+  const recentRange = Math.max(1, recentHigh - recentLow);
+  const risk = clamp(Math.max(2.2, candleRange * 1.7, recentRange * 0.28), 2.2, 8.5);
+  const sign = direction === "BUY" ? 1 : -1;
+  const entrySpread = Math.min(1.2, Math.max(0.35, risk * 0.16));
+  const entryLow = direction === "BUY" ? entry - entrySpread : entry - entrySpread * 0.45;
+  const entryHigh = direction === "BUY" ? entry + entrySpread * 0.45 : entry + entrySpread;
+  const sl = direction === "BUY" ? Math.min(recentLow, entry) - risk * 0.38 : Math.max(recentHigh, entry) + risk * 0.38;
+  const distance = Math.max(1.2, Math.abs(entry - sl));
+
+  return attachRiskReward({
+    entry: formatPrice(entry),
+    entryRange: `${formatPrice(entryLow)} - ${formatPrice(entryHigh)}`,
+    sl: formatPrice(sl),
+    tp1: formatPrice(entry + sign * distance * 1.25),
+    tp2: formatPrice(entry + sign * distance * 1.85),
+    tp3: formatPrice(entry + sign * distance * 2.65),
+    zone: trigger.reason,
+    structural: true,
+  }, direction);
 }
 
 function findOrderBlockCandidate(segment, startIndex, timeframe, direction, last) {
@@ -3257,6 +3325,7 @@ function scoreDiscretionarySide(direction, context) {
 
   const liquiditySweep = direction === "BUY" ? liquidity.sellSideSweep : liquidity.buySideSweep;
   const liquidityNear = direction === "BUY" ? liquidity.sellSideNear : liquidity.buySideNear;
+  const nearMarketTrigger = liquiditySweep || liquidityNear || confirmation.choch || advancedSmc.bosDisplacement || advancedSmc.fvgPresent || candleScan.valid || candleScan.current?.detections?.wickRejection;
   if (liquiditySweep) {
     total += 14;
     reasons.push("Liquidité balayée");
@@ -3280,6 +3349,10 @@ function scoreDiscretionarySide(direction, context) {
   if (candleScan.current?.detections?.wickRejection || candleScan.valid) {
     total += 5;
     reasons.push("Réaction bougie exploitable");
+  }
+  if (!executionBlock && nearMarketTrigger && (structureTrend.bias === direction || structureTrend.bias === "WAIT")) {
+    total += 12;
+    reasons.push("Entrée scalping proche du prix actuel");
   }
   if (!blocks.length) {
     total -= 12;
@@ -3500,9 +3573,9 @@ function getScalpingSignalValidation({ mode, direction, news, riskReward, score,
     return buildValidationFailure("Aucun trade qualifié", `ATTENTE · BUY ${scalpModel.buyScore}/100 · SELL ${scalpModel.sellScore}/100 · seuil ${scoreMinimum}`, "en attente");
   }
   if (!news.valid) return buildValidationFailure("Setup incomplet", news.reason, "en attente");
-  if (!scalpModel.bestBlock) {
+  if (!scalpModel.executionSetup) {
     const context = scalpModel.contextBlock
-      ? `OB ${scalpModel.contextBlock.timeframe} détecté mais trop loin du prix actuel (${formatDistance(scalpModel.contextBlock.distanceToPrice)} pts > ${formatDistance(scalpModel.executionDistanceLimit)} pts)`
+      ? `OB ${scalpModel.contextBlock.timeframe} détecté mais trop loin du prix actuel (${formatDistance(scalpModel.contextBlock.distanceToPrice)} pts > ${formatDistance(scalpModel.executionDistanceLimit)} pts). Attendre une réaction proche.`
       : "Aucun Order Block actif proche du prix actuel";
     return buildValidationFailure("Entrée trop loin", context, "en attente");
   }
@@ -3555,6 +3628,8 @@ function buildSmartMoneyAnalysis(session, market, news, zones, confirmation, can
     timeframe: confirmation.timeframe,
     zone: scalpModel.bestBlock
       ? `OB ${scalpModel.bestBlock.timeframe} ${scalpModel.bestBlock.direction} ${scalpModel.bestBlock.state}`
+      : scalpModel.fallbackTrigger
+        ? "Zone scalping proche du prix actuel"
       : scalpModel.contextBlock
         ? `OB ${scalpModel.contextBlock.timeframe} ${scalpModel.contextBlock.direction} trop loin`
         : zones.primary,
