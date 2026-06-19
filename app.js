@@ -730,7 +730,7 @@ async function loadMarketFallbackHistory(reason = "") {
     state.api.history = candles;
     state.api.historySource = "market-fallback";
     markMarketFlowUpdate(candles);
-    elements.apiNotice.textContent = `${reason ? `${reason} ` : ""}Graphique TSR auto-fit actif via flux OHLCV fallback ${data.sourceSymbol || "GC=F"}.`;
+    elements.apiNotice.textContent = `${reason ? `${reason} ` : ""}TradingView live actif + analyse TSR via flux OHLCV fallback ${data.sourceSymbol || "GC=F"}.`;
     elements.apiNotice.hidden = false;
     return state.api.history;
   } catch {
@@ -2609,21 +2609,17 @@ function getLivePrecisionCandles() {
 
 function renderLivePrecisionChart(candles, context, activeResult, entryProjection) {
   if (state.replay.active) return;
+  elements.chartFrame.classList.remove("tsr-live-active", "tv-fallback-active");
+  ensureTradingViewInterval();
   if (!candles.length) {
-    elements.chartFrame.classList.remove("tsr-live-active");
-    elements.chartFrame.classList.add("tv-fallback-active");
-    ensureTradingViewInterval();
     clearTsrOverlayCanvas();
     return;
   }
-  elements.chartFrame.classList.remove("tv-fallback-active");
-  elements.chartFrame.classList.add("tsr-live-active");
-  drawReplayChart(candles, context, activeResult, entryProjection);
+  drawLiveTsrOverlay(candles, context, activeResult, entryProjection);
 }
 
 function renderNoLiveCandlesState(session, market, news, zones) {
-  elements.chartFrame.classList.remove("tsr-live-active");
-  elements.chartFrame.classList.add("tv-fallback-active");
+  elements.chartFrame.classList.remove("tsr-live-active", "tv-fallback-active");
   ensureTradingViewInterval();
   clearTsrOverlayCanvas();
   const candleScan = buildEmptyCandleScan();

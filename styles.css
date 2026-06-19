@@ -818,13 +818,11 @@ button:active {
   pointer-events: none;
 }
 
-.chart-frame.replay-active #tradingview_chart,
-.chart-frame.tsr-live-active #tradingview_chart {
+.chart-frame.replay-active #tradingview_chart {
   display: none;
 }
 
-.chart-frame.replay-active .replay-canvas,
-.chart-frame.tsr-live-active .replay-canvas {
+.chart-frame.replay-active .replay-canvas {
   background: #090a08;
   pointer-events: auto;
 }
