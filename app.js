@@ -3085,7 +3085,7 @@ function buildScalpingDecisionModel(candles, market, zones, confirmation, candle
   });
   const threshold = 0;
   const direction = smartChecklist.signalDirection;
-  const activeBlocks = orderBlocks.filter((block) => block.state === "Active");
+  const activeBlocks = orderBlocks.filter((block) => isTradableScalpingOrderBlock(block));
   const directionalBlocks = smartChecklist.candidateDirection === "WAIT" ? activeBlocks : activeBlocks.filter((block) => block.direction === smartChecklist.candidateDirection);
   const executionBlocks = directionalBlocks.filter((block) => block.executionNear);
   const contextBlock = directionalBlocks.sort((a, b) => b.score - a.score)[0] || null;
@@ -3142,11 +3142,13 @@ function detectMultiTimeframeOrderBlocks(candles, last) {
 function buildSmartMoneyTsrChecklist(context) {
   const { candles, market, zones, confirmation, candleScan, advancedSmc, orderBlocks, liquidity, structureTrend, buyScore, sellScore, buyRsi, sellRsi } = context;
   const h1 = getSmartMoneyH1Structure(candles, market);
-  const candidateDirection = h1.bias;
+  const strongestScoreDirection = buyScore.total >= sellScore.total ? "BUY" : "SELL";
+  const candidateDirection = h1.bias !== "WAIT" ? h1.bias : Math.max(buyScore.total, sellScore.total) >= SMART_SCORE_DEFAULT_MINIMUM ? strongestScoreDirection : "WAIT";
   const cleanBlocks = getCleanSmartMoneyOrderBlocks(orderBlocks, candidateDirection, candles.length);
-  const activeOb = cleanBlocks[0] || null;
+  const responsiveBlocks = cleanBlocks.length ? cleanBlocks : getResponsiveSmartMoneyOrderBlocks(orderBlocks, candidateDirection, candles.length);
+  const activeOb = responsiveBlocks[0] || null;
   const liquidityReview = getSmartMoneyLiquidityReview(candidateDirection, liquidity, zones);
-  const microBos = Boolean(activeOb && (activeOb.timeframe === "M1" || activeOb.timeframe === "M5") && (activeOb.executionScore || activeOb.score || 0) >= 20);
+  const microBos = Boolean(activeOb && (activeOb.timeframe === "M1" || activeOb.timeframe === "M5") && (activeOb.executionScore || activeOb.score || 0) >= 18);
   const bosChoch = Boolean(confirmation.choch || advancedSmc.bosDisplacement || microBos);
   const retest = getSmartMoneyRetestReview(candidateDirection, activeOb, advancedSmc, zones);
   const priceAction = getSmartMoneyPriceActionReview(candidateDirection, candleScan);
@@ -3160,17 +3162,41 @@ function buildSmartMoneyTsrChecklist(context) {
   const checks = [
     { key: "h1", valid: candidateDirection !== "WAIT", reason: h1.label },
     { key: "structure", valid: structureTrend.bias === candidateDirection && candidateDirection !== "WAIT", reason: `${structureTrend.label} · ${structureTrend.reason}` },
-    { key: "ob", valid: Boolean(activeOb), reason: activeOb ? `OB ${activeOb.timeframe} propre ${activeOb.state}` : "Aucun OB H1/M15/M5/M1 propre" },
+    { key: "ob", valid: Boolean(activeOb), reason: activeOb ? `OB ${activeOb.timeframe} exploitable ${activeOb.state}` : "Aucun OB H1/M15/M5/M1 proche exploitable" },
     { key: "liquidity", valid: liquidityReview.valid, reason: liquidityReview.reason },
     { key: "bos", valid: bosChoch, reason: bosChoch ? microBos ? "Micro BOS/displacement M1-M5 confirme" : "BOS/CHoCH confirme" : "BOS/CHoCH non confirme" },
     { key: "retest", valid: retest.valid, reason: retest.reason },
     { key: "priceAction", valid: priceAction.valid, reason: priceAction.reason },
     { key: "rsi", valid: rsiFilterOk, reason: rsiFilterOk ? `RSI filtre OK (${rsi.value})` : `RSI filtre prudent (${rsi.value})` },
   ];
-  const requiredKeys = new Set(["h1", "structure", "ob", "liquidity", "bos", "retest", "priceAction"]);
-  const missing = checks.filter((check) => requiredKeys.has(check.key) && !check.valid);
-  const signalReady = missing.length === 0;
   const confidenceBase = candidateDirection === "BUY" ? buyScore.total : candidateDirection === "SELL" ? sellScore.total : Math.max(buyScore.total, sellScore.total);
+  const coreRequiredKeys = new Set(["h1", "structure", "ob", "retest"]);
+  const coreMissing = checks.filter((check) => coreRequiredKeys.has(check.key) && !check.valid);
+  const confirmationCluster = [
+    priceAction.valid,
+    bosChoch,
+    liquidityReview.valid,
+    advancedSmc.fvgPresent || zones.fvgPresent,
+  ].filter(Boolean).length;
+  const quickM1Scalp = Boolean(
+    activeOb
+    && (activeOb.timeframe === "M1" || activeOb.timeframe === "M5")
+    && activeOb.executionNear
+    && confidenceBase >= SMART_SCORE_DEFAULT_MINIMUM
+    && confirmationCluster >= 1
+  );
+  const scoreQualifiedScalp = Boolean(
+    activeOb
+    && confidenceBase >= 72
+    && confirmationCluster >= 2
+    && (priceAction.valid || microBos || activeOb.reacted || activeOb.inside)
+  );
+  const signalReady = coreMissing.length === 0 && (priceAction.valid || quickM1Scalp || scoreQualifiedScalp);
+  const missing = signalReady
+    ? []
+    : coreMissing.length
+      ? coreMissing
+      : [checks.find((check) => check.key === "priceAction")].filter(Boolean);
   const confidence = clamp(Math.round(
     (signalReady ? 62 : 34)
     + checks.filter((check) => check.valid).length * 4
@@ -3187,13 +3213,15 @@ function buildSmartMoneyTsrChecklist(context) {
     confidence,
     h1,
     activeOb,
-    cleanBlocks,
+    cleanBlocks: responsiveBlocks,
     liquidityReview,
     bosChoch,
     microBos,
     retest,
     priceAction,
     rsiFilterOk,
+    quickM1Scalp,
+    scoreQualifiedScalp,
     checks,
     waitReason: missing[0]?.reason || (signalReady ? "" : "Conditions Smart Money incompletes"),
     reasons: checks.filter((check) => check.valid && check.key !== "rsi").map((check) => check.reason).slice(0, 5),
@@ -3221,15 +3249,35 @@ function getCleanSmartMoneyOrderBlocks(orderBlocks, direction, candleCount) {
   return orderBlocks
     .filter((block) => block.direction === direction)
     .filter((block) => block.timeframe === "H1" || block.timeframe === "M15" || block.timeframe === "M5" || block.timeframe === "M1")
-    .filter((block) => block.state === "Active")
-    .filter((block) => !block.mitigated && !block.broken && !block.invalid)
+    .filter((block) => isTradableScalpingOrderBlock(block))
     .filter((block) => {
       const age = candleCount - (block.startIndex || 0);
-      const maxAge = block.timeframe === "H1" ? 88 : block.timeframe === "M15" ? 52 : block.timeframe === "M5" ? 34 : 22;
+      const maxAge = block.timeframe === "H1" ? 96 : block.timeframe === "M15" ? 64 : block.timeframe === "M5" ? 48 : 36;
       return age <= maxAge;
     })
     .filter((block) => block.timeframe === "H1" || block.timeframe === "M15" || block.executionNear || block.reacted || block.inside)
-    .filter((block) => (block.executionScore || block.score || 0) >= (block.timeframe === "M1" ? 12 : block.timeframe === "M5" ? 14 : 20))
+    .filter((block) => (block.executionScore || block.score || 0) >= (block.timeframe === "M1" ? 9 : block.timeframe === "M5" ? 11 : 18))
+    .sort((a, b) => getExecutionBlockRank(b) - getExecutionBlockRank(a));
+}
+
+function getResponsiveSmartMoneyOrderBlocks(orderBlocks, direction, candleCount) {
+  if (direction !== "BUY" && direction !== "SELL") return [];
+  return orderBlocks
+    .filter((block) => block.direction === direction)
+    .filter((block) => block.timeframe === "H1" || block.timeframe === "M15" || block.timeframe === "M5" || block.timeframe === "M1")
+    .filter((block) => isTradableScalpingOrderBlock(block))
+    .filter((block) => {
+      const age = candleCount - (block.startIndex || 0);
+      const maxAge = block.timeframe === "H1" ? 140 : block.timeframe === "M15" ? 90 : block.timeframe === "M5" ? 60 : 46;
+      return age <= maxAge;
+    })
+    .filter((block) => {
+      if (block.timeframe === "M1" || block.timeframe === "M5") {
+        const limit = Number(block.executionDistanceLimit) || SCALPING_EXECUTION_DISTANCE_CAP;
+        return block.executionNear || block.reacted || block.inside || (block.distanceToPrice || Infinity) <= limit * 1.45;
+      }
+      return block.executionNear || block.reacted || block.inside || block.state === "Active";
+    })
     .sort((a, b) => getExecutionBlockRank(b) - getExecutionBlockRank(a));
 }
 
@@ -3285,6 +3333,12 @@ function annotateScalpingOrderBlocks(blocks, candles, last) {
       executionDistanceLimit: limit,
     };
   });
+}
+
+function isTradableScalpingOrderBlock(block) {
+  if (!block || block.broken || block.invalid || block.state === "Broken" || block.state === "Invalid") return false;
+  if (block.state === "Active") return true;
+  return block.state === "Mitigated" && Boolean(block.executionNear || block.reacted || block.inside);
 }
 
 function getScalpingExecutionDistanceLimit(candles, last) {
@@ -3447,7 +3501,7 @@ function scoreDiscretionarySide(direction, context) {
   const { orderBlocks, liquidity, structureTrend, zones, confirmation, candleScan, advancedSmc, rsi } = context;
   const reasons = [];
   let total = 0;
-  const blocks = orderBlocks.filter((block) => block.direction === direction && block.state === "Active");
+  const blocks = orderBlocks.filter((block) => block.direction === direction && isTradableScalpingOrderBlock(block));
   const htfBlock = blocks.find((block) => block.timeframe === "D1" || block.timeframe === "H4");
   const h1Block = blocks.find((block) => block.timeframe === "H1");
   const m15Block = blocks.find((block) => block.timeframe === "M15");
