@@ -577,6 +577,7 @@ button:active {
   color: #ded7c7;
   font-size: 0.78rem;
   line-height: 1.28;
+  white-space: pre-line;
 }
 
 .chart-signal-alert.buy {
@@ -618,7 +619,7 @@ button:active {
   z-index: 12;
   display: grid;
   gap: 6px;
-  width: min(224px, calc(100% - 32px));
+  width: min(270px, calc(100% - 32px));
   padding: 10px;
   border: 1px solid rgba(231, 184, 78, 0.58);
   border-radius: 8px;
@@ -654,11 +655,12 @@ button:active {
 
 .chart-decision-card p {
   margin: 0;
-  max-height: 58px;
+  max-height: 180px;
   overflow: hidden;
   color: #ded7c7;
   font-size: 0.68rem;
   line-height: 1.3;
+  white-space: pre-line;
 }
 
 .chart-decision-card.buy {
@@ -1277,6 +1279,8 @@ button:active {
   margin: 0 0 15px;
   color: #cfc7b5;
   font-size: 0.92rem;
+  line-height: 1.42;
+  white-space: pre-line;
 }
 
 .badge-row {

@@ -44,6 +44,8 @@ const SMART_SCORE_DEFAULT_MINIMUM = 65;
 const GOLD_SCORE_DEFAULT_MINIMUM = 75;
 const PRICE_SCALE_VISIBLE_CANDLES = 56;
 const PRICE_SCALE_MARGIN_RATIO = 0.1;
+const LIVE_TSR_ZONE_DISTANCE_RATIO = 0.22;
+const LIVE_TSR_ZONE_LIMIT = 5;
 const TOP_DOWN_TIMEFRAMES = [
   { label: "Mensuel", group: 180, weight: 24, role: "historique large" },
   { label: "Weekly", group: 132, weight: 22, role: "liquidite majeure" },
@@ -260,6 +262,13 @@ function renderTradingView() {
     hide_side_toolbar: false,
     details: true,
     calendar: false,
+    studies: [],
+    disabled_features: [
+      "header_symbol_search",
+      "symbol_search_hot_key",
+      "compare_symbol",
+      "display_market_status",
+    ],
     support_host: "https://www.tradingview.com",
     container_id: "tradingview_chart",
     overrides: {
@@ -400,6 +409,7 @@ function bindInteractions() {
     state.autoFitVisibleCandles = true;
     elements.autoFitVisibleCandles.checked = true;
     writePriceAutoFit();
+    renderTradingView();
     evaluateAndRender();
   });
 
@@ -1011,9 +1021,9 @@ function evaluateReplayAndRender() {
   elements.scoreTop.textContent = activeResult.score;
   elements.setupState.textContent = entryProjection.statusLabel;
   elements.activeModeLabel.textContent = `${activeResult.name} · Replay`;
-  elements.tradeDirection.textContent = activeResult.status;
+  elements.tradeDirection.textContent = getManualDirectionLabel(activeResult.status);
   elements.tradeDirection.style.color = getStatusColor(activeResult.status);
-  elements.signalReason.textContent = entryProjection.reason;
+  elements.signalReason.textContent = buildManualSignalSummary(activeResult, entryProjection);
   renderChartSignalAlert(activeResult, entryProjection);
   elements.badgeRow.innerHTML = activeResult.badges.map(renderBadge).join("");
   elements.scoreFill.style.width = `${activeResult.score}%`;
@@ -2578,9 +2588,9 @@ function evaluateAndRender() {
   elements.scoreTop.textContent = activeResult.score;
   elements.setupState.textContent = entryProjection.statusLabel;
   elements.activeModeLabel.textContent = activeResult.name;
-  elements.tradeDirection.textContent = activeResult.status;
+  elements.tradeDirection.textContent = getManualDirectionLabel(activeResult.status);
   elements.tradeDirection.style.color = getStatusColor(activeResult.status);
-  elements.signalReason.textContent = entryProjection.reason;
+  elements.signalReason.textContent = buildManualSignalSummary(activeResult, entryProjection);
   renderChartSignalAlert(activeResult, entryProjection);
   elements.badgeRow.innerHTML = activeResult.badges.map(renderBadge).join("");
   elements.scoreFill.style.width = `${activeResult.score}%`;
@@ -2685,9 +2695,9 @@ function renderNoLiveCandlesState(session, market, news, zones) {
   elements.scoreTop.textContent = activeResult.score;
   elements.setupState.textContent = entryProjection.statusLabel;
   elements.activeModeLabel.textContent = activeResult.name;
-  elements.tradeDirection.textContent = activeResult.status;
+  elements.tradeDirection.textContent = getManualDirectionLabel(activeResult.status);
   elements.tradeDirection.style.color = getStatusColor(activeResult.status);
-  elements.signalReason.textContent = entryProjection.reason;
+  elements.signalReason.textContent = buildManualSignalSummary(activeResult, entryProjection);
   renderChartSignalAlert(activeResult, entryProjection);
   elements.badgeRow.innerHTML = activeResult.badges.map(renderBadge).join("");
   elements.scoreFill.style.width = "0%";
@@ -3987,7 +3997,7 @@ function renderChartSignalAlert(activeResult, entryProjection) {
   elements.chartSignalAlert.classList.toggle("refused", direction === "SIGNAL REFUSÉ");
   elements.chartSignalAlert.classList.toggle("waiting", direction !== "BUY" && direction !== "SELL" && direction !== "SIGNAL REFUSÉ");
   elements.chartAlertStage.textContent = entryProjection.statusLabel;
-  elements.chartAlertDirection.textContent = direction;
+  elements.chartAlertDirection.textContent = getManualDirectionLabel(direction);
   elements.chartAlertReason.textContent = buildChartAlertReason(activeResult, entryProjection);
   renderChartDecisionCard(activeResult, entryProjection);
 }
@@ -4000,8 +4010,8 @@ function renderChartDecisionCard(activeResult, entryProjection) {
   elements.chartDecisionCard.classList.toggle("waiting", direction !== "BUY" && direction !== "SELL" && direction !== "SIGNAL REFUSÉ");
   elements.chartDecisionStage.textContent = entryProjection.statusLabel;
   elements.chartDecisionMode.textContent = activeResult.name;
-  elements.chartDecisionDirection.textContent = direction;
-  elements.chartDecisionReason.textContent = entryProjection.reason;
+  elements.chartDecisionDirection.textContent = getManualDirectionLabel(direction);
+  elements.chartDecisionReason.textContent = buildManualSignalSummary(activeResult, entryProjection);
   elements.chartDecisionBadges.innerHTML = activeResult.badges.map(renderBadge).join("");
   elements.chartDecisionFill.style.width = `${activeResult.score}%`;
   elements.chartDecisionScore.textContent = `${activeResult.score} / 100`;
@@ -4010,12 +4020,64 @@ function renderChartDecisionCard(activeResult, entryProjection) {
 function buildChartAlertReason(activeResult, entryProjection) {
   const setup = entryProjection.setup;
   if (activeResult.status === "BUY" || activeResult.status === "SELL") {
-    return `Entrée ${setup.entryRange || setup.entry} · SL ${setup.sl} · TP1 ${setup.tp1} · RR ${activeResult.riskReward?.display || entryProjection.metrics.rr} · ${entryProjection.metrics.status}`;
+    return `Entrée ${setup.entryRange || setup.entry} · SL ${setup.sl} · TP1 ${setup.tp1} · TP2 ${setup.tp2} · TP3 ${setup.tp3}`;
   }
   if (activeResult.status === "SIGNAL REFUSÉ" && activeResult.riskReward?.display) {
     return `Signal refusé : RR insuffisant · RR ${activeResult.riskReward.display} · minimum ${formatRiskRewardValue(state.riskRewardMinimum)}`;
   }
   return entryProjection.reason;
+}
+
+function buildManualSignalSummary(activeResult, entryProjection = null) {
+  const setup = entryProjection?.setup || activeResult.setup || {};
+  const direction = activeResult.status;
+  const confirmed = direction === "BUY" || direction === "SELL";
+  const rr = activeResult.riskReward?.display && activeResult.riskReward.display !== "--" ? ` · RR ${activeResult.riskReward.display}` : "";
+  const reasons = getManualSignalReasons(activeResult).slice(0, 3);
+
+  if (confirmed) {
+    return [
+      `Entrée : ${setup.entryRange || setup.entry || "--"}`,
+      `SL : ${setup.sl || "--"}`,
+      `TP1 : ${setup.tp1 || "--"}`,
+      `TP2 : ${setup.tp2 || "--"}`,
+      `TP3 : ${setup.tp3 || "--"}`,
+      `Score : ${activeResult.score}/100${rr}`,
+      "",
+      "Raison :",
+      ...(reasons.length ? reasons : [activeResult.zone || "Setup validé par TSR"]),
+    ].join("\n");
+  }
+
+  return [
+    getManualDirectionLabel(direction),
+    activeResult.buyScore != null || activeResult.sellScore != null
+      ? `BUY Score : ${activeResult.buyScore ?? "--"}/100 · SELL Score : ${activeResult.sellScore ?? "--"}/100`
+      : `Score : ${activeResult.score ?? 0}/100${rr}`,
+    "",
+    "Raison :",
+    ...(reasons.length ? reasons : [activeResult.blockingReason || entryProjection?.reason || "Attendre meilleure configuration"]),
+  ].join("\n");
+}
+
+function getManualDirectionLabel(status) {
+  if (status === "BUY") return "🟢 BUY";
+  if (status === "SELL") return "🔴 SELL";
+  if (status === "SIGNAL REFUSÉ") return "SIGNAL REFUSÉ";
+  if (status === "AUCUN TRADE") return "AUCUN TRADE";
+  return "ATTENTE";
+}
+
+function getManualSignalReasons(activeResult) {
+  if (activeResult.scalpingModel?.reasons?.length) return activeResult.scalpingModel.reasons;
+  const reason = String(activeResult.reason || activeResult.blockingReason || "");
+  const reasonOnly = reason.includes("Raison :") ? reason.split("Raison :").pop() : reason;
+  return reasonOnly
+    .split(/ · |\. |\n/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .filter((item) => !/^Entrée /i.test(item) && !/^SL /i.test(item) && !/^TP\d /i.test(item))
+    .slice(0, 4);
 }
 
 function renderComparison(smartResult, goldResult) {
@@ -4140,17 +4202,17 @@ function renderLiveTsrZonesOverlay(candles, topDownAnalysis = { zones: [] }) {
     clearStrategyOverlay();
     return;
   }
-  const zones = (topDownAnalysis.zones || [])
-    .filter(shouldShowLiveTsrZone)
-    .sort((a, b) => getLiveZonePriority(b) - getLiveZonePriority(a))
-    .slice(0, 14);
-  if (!candles.length || !zones.length) {
+  const scale = getLiveOverlayPriceScale(candles);
+  if (!scale) {
     clearStrategyOverlay();
     return;
   }
-
-  const scale = getLiveOverlayPriceScale(candles, zones);
-  if (!scale) {
+  const zones = (topDownAnalysis.zones || [])
+    .filter(shouldShowLiveTsrZone)
+    .filter((zone) => isZoneNearLivePrice(zone, scale))
+    .sort((a, b) => getLiveZonePriority(b) - getLiveZonePriority(a))
+    .slice(0, LIVE_TSR_ZONE_LIMIT);
+  if (!candles.length || !zones.length) {
     clearStrategyOverlay();
     return;
   }
@@ -4182,7 +4244,7 @@ function getLiveZonePriority(zone) {
   return typeScore + statusScore + Math.round((zone.score || 0) * 0.35);
 }
 
-function getLiveOverlayPriceScale(candles, zones) {
+function getLiveOverlayPriceScale(candles) {
   const visible = candles.slice(-PRICE_SCALE_VISIBLE_CANDLES);
   if (!visible.length) return null;
   const candleHigh = Math.max(...visible.map((candle) => candle.high).filter(Number.isFinite));
@@ -4192,7 +4254,26 @@ function getLiveOverlayPriceScale(candles, zones) {
   if (!Number.isFinite(rawHigh) || !Number.isFinite(rawLow) || rawHigh <= rawLow) return null;
   const range = rawHigh - rawLow;
   const padding = Math.max(0.8, range * 0.08);
-  return { high: rawHigh + padding, low: rawLow - padding };
+  const last = visible[visible.length - 1];
+  return {
+    high: rawHigh + padding,
+    low: rawLow - padding,
+    candleHigh,
+    candleLow,
+    mid: (candleHigh + candleLow) / 2,
+    range,
+    currentPrice: last?.close,
+  };
+}
+
+function isZoneNearLivePrice(zone, scale) {
+  const top = Math.max(zone.top, zone.bottom);
+  const bottom = Math.min(zone.top, zone.bottom);
+  if (![top, bottom, scale.currentPrice, scale.range].every(Number.isFinite)) return false;
+  const touchesVisibleCandles = top >= scale.candleLow && bottom <= scale.candleHigh;
+  const distance = scale.currentPrice > top ? scale.currentPrice - top : scale.currentPrice < bottom ? bottom - scale.currentPrice : 0;
+  const maxDistance = Math.max(1.5, scale.range * LIVE_TSR_ZONE_DISTANCE_RATIO);
+  return touchesVisibleCandles || distance <= maxDistance;
 }
 
 function renderLiveTsrZone(zone, scale) {
