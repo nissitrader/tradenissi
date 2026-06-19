@@ -8,7 +8,7 @@ module.exports = async (request, response) => {
   }
 
   try {
-    const body = await readJsonBody(request);
+    const body = await readJsonBody(request).catch(() => ({}));
     const candles = normalizeCandles(body?.candles || []).slice(-220);
     if (candles.length < 30) {
       response.status(200).json(waitDecision([
@@ -22,7 +22,7 @@ module.exports = async (request, response) => {
     response.status(200).json(analyzeQuickTsr(candles));
   } catch (error) {
     console.error("Quick TSR analysis failed", error);
-    response.status(500).json(waitDecision([
+    response.status(200).json(waitDecision([
       "Analyse rapide indisponible cote serveur.",
       "Relancer l'analyse dans quelques secondes.",
       "Le graphique live reste prioritaire.",
