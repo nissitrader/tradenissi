@@ -3067,26 +3067,33 @@ function buildScalpingDecisionModel(candles, market, zones, confirmation, candle
   const sellRsi = getRsiConfirmation("SELL", usable);
   const buyScore = scoreDiscretionarySide("BUY", { orderBlocks, liquidity, structureTrend, zones, confirmation, candleScan, advancedSmc, rsi: buyRsi });
   const sellScore = scoreDiscretionarySide("SELL", { orderBlocks, liquidity, structureTrend, zones, confirmation, candleScan, advancedSmc, rsi: sellRsi });
-  const threshold = Math.max(65, Number(state.scoreMinimums.smart) || SMART_SCORE_DEFAULT_MINIMUM);
-  let direction = "WAIT";
-  if (buyScore.total >= threshold || sellScore.total >= threshold) {
-    direction = buyScore.total >= sellScore.total ? "BUY" : "SELL";
-  }
+  const smartChecklist = buildSmartMoneyTsrChecklist({
+    candles: usable,
+    last,
+    market,
+    zones,
+    confirmation,
+    candleScan,
+    advancedSmc,
+    orderBlocks,
+    liquidity,
+    structureTrend,
+    buyScore,
+    sellScore,
+    buyRsi,
+    sellRsi,
+  });
+  const threshold = 0;
+  const direction = smartChecklist.signalDirection;
   const activeBlocks = orderBlocks.filter((block) => block.state === "Active");
-  const directionalBlocks = direction === "WAIT" ? activeBlocks : activeBlocks.filter((block) => block.direction === direction);
+  const directionalBlocks = smartChecklist.candidateDirection === "WAIT" ? activeBlocks : activeBlocks.filter((block) => block.direction === smartChecklist.candidateDirection);
   const executionBlocks = directionalBlocks.filter((block) => block.executionNear);
   const contextBlock = directionalBlocks.sort((a, b) => b.score - a.score)[0] || null;
-  const bestBlock = executionBlocks.sort((a, b) => getExecutionBlockRank(b) - getExecutionBlockRank(a))[0] || null;
-  const fallbackTrigger = direction !== "WAIT" && !bestBlock
-    ? getNearbyScalpingTrigger(direction, { liquidity, structureTrend, confirmation, candleScan, advancedSmc })
-    : null;
-  const executionSetup = bestBlock && direction !== "WAIT"
-    ? buildOrderBlockSetup(direction, bestBlock, last)
-    : fallbackTrigger
-      ? buildNearbyScalpingSetup(direction, last, usable, fallbackTrigger)
-      : null;
-  const reasons = direction === "BUY" ? buyScore.reasons : direction === "SELL" ? sellScore.reasons : [...buyScore.reasons, ...sellScore.reasons].slice(0, 4);
-  if (fallbackTrigger) reasons.unshift(fallbackTrigger.reason);
+  const bestBlock = smartChecklist.activeOb || executionBlocks.sort((a, b) => getExecutionBlockRank(b) - getExecutionBlockRank(a))[0] || null;
+  const executionSetup = bestBlock && direction !== "WAIT" ? buildOrderBlockSetup(direction, bestBlock, last) : null;
+  const reasons = smartChecklist.signalReady
+    ? smartChecklist.reasons
+    : [smartChecklist.waitReason, ...smartChecklist.reasons].filter(Boolean);
 
   return {
     direction,
@@ -3102,12 +3109,16 @@ function buildScalpingDecisionModel(candles, market, zones, confirmation, candle
     activeOrderBlocks: activeBlocks,
     bestBlock,
     contextBlock,
-    fallbackTrigger,
     executionSetup,
+    smartChecklist,
+    signalReady: smartChecklist.signalReady,
+    waitReason: smartChecklist.waitReason,
+    confidence: smartChecklist.confidence,
+    candidateDirection: smartChecklist.candidateDirection,
     executionDistanceLimit: getScalpingExecutionDistanceLimit(usable, last),
     liquidity,
     setup: executionSetup,
-    summary: `BUY ${buyScore.total}/100 · SELL ${sellScore.total}/100 · tendance ${structureTrend.label}`,
+    summary: `Signal ${direction} · confiance ${smartChecklist.confidence}% · ${smartChecklist.waitReason || "conditions Smart Money validees"}`,
   };
 }
 
@@ -3123,6 +3134,126 @@ function detectMultiTimeframeOrderBlocks(candles, last) {
     });
   });
   return blocks.sort((a, b) => b.score - a.score);
+}
+
+function buildSmartMoneyTsrChecklist(context) {
+  const { candles, market, zones, confirmation, candleScan, advancedSmc, orderBlocks, liquidity, structureTrend, buyScore, sellScore, buyRsi, sellRsi } = context;
+  const h1 = getSmartMoneyH1Structure(candles, market);
+  const candidateDirection = h1.bias;
+  const cleanBlocks = getCleanSmartMoneyOrderBlocks(orderBlocks, candidateDirection, candles.length);
+  const activeOb = cleanBlocks[0] || null;
+  const liquidityReview = getSmartMoneyLiquidityReview(candidateDirection, liquidity, zones);
+  const bosChoch = Boolean(confirmation.choch || advancedSmc.bosDisplacement);
+  const retest = getSmartMoneyRetestReview(candidateDirection, activeOb, advancedSmc, zones);
+  const priceAction = getSmartMoneyPriceActionReview(candidateDirection, candleScan);
+  const rsi = candidateDirection === "BUY" ? buyRsi : candidateDirection === "SELL" ? sellRsi : { value: 50, valid: false, label: "RSI neutre" };
+  const rsiFilterOk = candidateDirection === "BUY"
+    ? Number(rsi.value) <= 74
+    : candidateDirection === "SELL"
+      ? Number(rsi.value) >= 26
+      : false;
+
+  const checks = [
+    { key: "h1", valid: candidateDirection !== "WAIT", reason: h1.label },
+    { key: "structure", valid: structureTrend.bias === candidateDirection && candidateDirection !== "WAIT", reason: `${structureTrend.label} · ${structureTrend.reason}` },
+    { key: "ob", valid: Boolean(activeOb), reason: activeOb ? `OB ${activeOb.timeframe} propre ${activeOb.state}` : "Aucun OB H1/M15 propre" },
+    { key: "liquidity", valid: liquidityReview.valid, reason: liquidityReview.reason },
+    { key: "bos", valid: bosChoch, reason: bosChoch ? "BOS/CHoCH confirme" : "BOS/CHoCH non confirme" },
+    { key: "retest", valid: retest.valid, reason: retest.reason },
+    { key: "priceAction", valid: priceAction.valid, reason: priceAction.reason },
+    { key: "rsi", valid: rsiFilterOk, reason: rsiFilterOk ? `RSI filtre OK (${rsi.value})` : `RSI filtre prudent (${rsi.value})` },
+  ];
+  const requiredKeys = new Set(["h1", "structure", "ob", "liquidity", "bos", "retest", "priceAction"]);
+  const missing = checks.filter((check) => requiredKeys.has(check.key) && !check.valid);
+  const signalReady = missing.length === 0;
+  const confidenceBase = candidateDirection === "BUY" ? buyScore.total : candidateDirection === "SELL" ? sellScore.total : Math.max(buyScore.total, sellScore.total);
+  const confidence = clamp(Math.round(
+    (signalReady ? 62 : 34)
+    + checks.filter((check) => check.valid).length * 4
+    + (activeOb?.timeframe === "H1" ? 8 : activeOb?.timeframe === "M15" ? 5 : 0)
+    + (advancedSmc.bosDisplacement ? 5 : 0)
+    + (rsi.valid ? 3 : 0)
+    + confidenceBase * 0.12,
+  ), 0, 100);
+
+  return {
+    candidateDirection,
+    signalDirection: signalReady ? candidateDirection : "WAIT",
+    signalReady,
+    confidence,
+    h1,
+    activeOb,
+    cleanBlocks,
+    liquidityReview,
+    bosChoch,
+    retest,
+    priceAction,
+    rsiFilterOk,
+    checks,
+    waitReason: missing[0]?.reason || (signalReady ? "" : "Conditions Smart Money incompletes"),
+    reasons: checks.filter((check) => check.valid && check.key !== "rsi").map((check) => check.reason).slice(0, 5),
+  };
+}
+
+function getSmartMoneyH1Structure(candles, market) {
+  const h1Candles = candles.slice(-54);
+  const structure = getStructureTrend(h1Candles, market);
+  if (structure.bias !== "WAIT") {
+    return {
+      ...structure,
+      label: structure.bias === "BUY" ? "Direction H1 bullish HH/HL" : "Direction H1 bearish LL/LH",
+    };
+  }
+  return {
+    bias: "WAIT",
+    label: "Direction H1 neutre / range",
+    reason: structure.reason,
+  };
+}
+
+function getCleanSmartMoneyOrderBlocks(orderBlocks, direction, candleCount) {
+  if (direction !== "BUY" && direction !== "SELL") return [];
+  return orderBlocks
+    .filter((block) => block.direction === direction)
+    .filter((block) => block.timeframe === "H1" || block.timeframe === "M15")
+    .filter((block) => block.state === "Active")
+    .filter((block) => !block.mitigated && !block.broken && !block.invalid)
+    .filter((block) => {
+      const age = candleCount - (block.startIndex || 0);
+      const maxAge = block.timeframe === "H1" ? 88 : 46;
+      return age <= maxAge;
+    })
+    .filter((block) => (block.executionScore || block.score || 0) >= 20)
+    .sort((a, b) => getExecutionBlockRank(b) - getExecutionBlockRank(a));
+}
+
+function getSmartMoneyLiquidityReview(direction, liquidity, zones) {
+  if (direction !== "BUY" && direction !== "SELL") return { valid: false, reason: "Liquidite en attente" };
+  const swept = direction === "BUY" ? liquidity.sellSideSweep : liquidity.buySideSweep;
+  const targetNear = direction === "BUY" ? liquidity.buySideNear : liquidity.sellSideNear;
+  const targetExists = direction === "BUY" ? Boolean(liquidity.buySide) : Boolean(liquidity.sellSide);
+  if (swept) return { valid: true, reason: "Liquidite prise avant entree" };
+  if (zones.liquidityTaken) return { valid: true, reason: "Liquidite prise sur les bougies live" };
+  if (targetNear || targetExists) return { valid: true, reason: "Liquidite ciblee identifiee" };
+  return { valid: false, reason: "Liquidite non prise / non ciblee" };
+}
+
+function getSmartMoneyRetestReview(direction, activeOb, advancedSmc, zones) {
+  if (direction !== "BUY" && direction !== "SELL") return { valid: false, reason: "Retest en attente" };
+  if (activeOb?.inside || activeOb?.reacted || activeOb?.executionNear) return { valid: true, reason: `Retest OB ${activeOb.timeframe} valide` };
+  if (advancedSmc.fvgPresent || zones.fvgPresent) return { valid: true, reason: "Retest FVG / imbalance valide" };
+  return { valid: false, reason: "Pas de retest OB/FVG valide" };
+}
+
+function getSmartMoneyPriceActionReview(direction, candleScan) {
+  const candle = candleScan.current;
+  if (!candle || direction !== "BUY" && direction !== "SELL") return { valid: false, reason: "Price action en attente" };
+  const detections = candle.detections || {};
+  const buy = detections.bullishRejection || detections.bullishEngulfing || detections.pinBar && candle.lowerWickRatio > candle.upperWickRatio || detections.bullishImpulse || candle.direction === "bullish" && candle.bodyRatio >= 0.44 && candle.closePosition >= 0.62;
+  const sell = detections.bearishRejection || detections.bearishEngulfing || detections.pinBar && candle.upperWickRatio > candle.lowerWickRatio || detections.bearishImpulse || candle.direction === "bearish" && candle.bodyRatio >= 0.44 && candle.closePosition <= 0.38;
+  if (direction === "BUY" && buy) return { valid: true, reason: "Confirmation M5/M1 bullish price action" };
+  if (direction === "SELL" && sell) return { valid: true, reason: "Confirmation M5/M1 bearish price action" };
+  return { valid: false, reason: "Pas de confirmation price action M5/M1" };
 }
 
 function annotateScalpingOrderBlocks(blocks, candles, last) {
@@ -3173,54 +3304,6 @@ function getExecutionBlockRank(block) {
   const timeframeBonus = block.timeframe === "M1" ? 16 : block.timeframe === "M5" ? 14 : block.timeframe === "M15" ? 12 : block.timeframe === "H1" ? 8 : 4;
   const distancePenalty = Math.round((block.distanceToPrice || 0) * 2);
   return (block.executionScore || block.score || 0) + timeframeBonus - distancePenalty;
-}
-
-function getNearbyScalpingTrigger(direction, context) {
-  const { liquidity, structureTrend, confirmation, candleScan, advancedSmc } = context;
-  const candleOk = Boolean(candleScan.valid || candleScan.current?.detections?.wickRejection || candleScan.current?.detections?.displacement);
-  const trendOk = structureTrend.bias === direction || structureTrend.bias === "WAIT";
-  const liquiditySweep = direction === "BUY" ? liquidity.sellSideSweep : liquidity.buySideSweep;
-  const liquidityNear = direction === "BUY" ? liquidity.sellSideNear : liquidity.buySideNear;
-  const structureImpulse = Boolean(confirmation.choch || advancedSmc?.bosDisplacement || advancedSmc?.fvgPresent);
-
-  if (liquiditySweep && candleOk) {
-    return { strength: 3, reason: "Entrée scalping proche : liquidité balayée + réaction bougie" };
-  }
-  if (trendOk && candleOk && structureImpulse) {
-    return { strength: 2, reason: "Entrée scalping proche : tendance + impulsion actuelle" };
-  }
-  if (trendOk && candleOk && liquidityNear) {
-    return { strength: 1, reason: "Entrée scalping proche : prix proche liquidité + bougie exploitable" };
-  }
-  return null;
-}
-
-function buildNearbyScalpingSetup(direction, last, candles, trigger) {
-  const entry = Number(last?.close);
-  if (!Number.isFinite(entry)) return null;
-  const recent = candles.slice(-12);
-  const recentHigh = recent.length ? Math.max(...recent.map((candle) => candle.high)) : Number(last.high);
-  const recentLow = recent.length ? Math.min(...recent.map((candle) => candle.low)) : Number(last.low);
-  const candleRange = Math.max(0.6, Number(last.high) - Number(last.low));
-  const recentRange = Math.max(1, recentHigh - recentLow);
-  const risk = clamp(Math.max(2.2, candleRange * 1.7, recentRange * 0.28), 2.2, 8.5);
-  const sign = direction === "BUY" ? 1 : -1;
-  const entrySpread = Math.min(1.2, Math.max(0.35, risk * 0.16));
-  const entryLow = direction === "BUY" ? entry - entrySpread : entry - entrySpread * 0.45;
-  const entryHigh = direction === "BUY" ? entry + entrySpread * 0.45 : entry + entrySpread;
-  const sl = direction === "BUY" ? Math.min(recentLow, entry) - risk * 0.38 : Math.max(recentHigh, entry) + risk * 0.38;
-  const distance = Math.max(1.2, Math.abs(entry - sl));
-
-  return attachRiskReward({
-    entry: formatPrice(entry),
-    entryRange: `${formatPrice(entryLow)} - ${formatPrice(entryHigh)}`,
-    sl: formatPrice(sl),
-    tp1: formatPrice(entry + sign * distance * 1.25),
-    tp2: formatPrice(entry + sign * distance * 1.85),
-    tp3: formatPrice(entry + sign * distance * 2.65),
-    zone: trigger.reason,
-    structural: true,
-  }, direction);
 }
 
 function findOrderBlockCandidate(segment, startIndex, timeframe, direction, last) {
@@ -3615,9 +3698,12 @@ function getTp1SpaceReview(setup) {
 
 function getScalpingSignalValidation({ mode, direction, news, riskReward, score, scoreMinimum, scalpModel, h1Direction }) {
   if (direction !== "BUY" && direction !== "SELL") {
-    return buildValidationFailure("Aucun trade qualifié", `ATTENTE · BUY ${scalpModel.buyScore}/100 · SELL ${scalpModel.sellScore}/100 · seuil ${scoreMinimum}`, "en attente");
+    return buildValidationFailure("WAIT", scalpModel.waitReason || `WAIT · BUY ${scalpModel.buyScore}/100 · SELL ${scalpModel.sellScore}/100`, "en attente");
   }
-  if (!news.valid) return buildValidationFailure("Setup incomplet", news.reason, "en attente");
+  if (mode === "smart" && !scalpModel.signalReady) {
+    return buildValidationFailure("WAIT", scalpModel.waitReason || "Conditions Smart Money incompletes", "en attente");
+  }
+  if (mode !== "smart" && !news.valid) return buildValidationFailure("Setup incomplet", news.reason, "en attente");
   if (!scalpModel.executionSetup) {
     const context = scalpModel.contextBlock
       ? `OB ${scalpModel.contextBlock.timeframe} détecté mais trop loin du prix actuel (${formatDistance(scalpModel.contextBlock.distanceToPrice)} pts > ${formatDistance(scalpModel.executionDistanceLimit)} pts). Attendre une réaction proche.`
@@ -3627,7 +3713,7 @@ function getScalpingSignalValidation({ mode, direction, news, riskReward, score,
   if (mode === "gold" && h1Direction?.bias && h1Direction.bias !== "WAIT" && h1Direction.bias !== direction) {
     return buildValidationFailure("Signal refusé", "Signal refusé : contre tendance H1", "refusé");
   }
-  if (score < scoreMinimum) {
+  if (mode !== "smart" && score < scoreMinimum) {
     return buildValidationFailure("Aucun trade qualifié", `Score insuffisant · BUY ${scalpModel.buyScore}/100 · SELL ${scalpModel.sellScore}/100 · seuil ${scoreMinimum}`, "en attente");
   }
   if (!riskReward.valid) {
@@ -3639,7 +3725,7 @@ function getScalpingSignalValidation({ mode, direction, news, riskReward, score,
     setupState: "Setup complet",
     statusKind: "actif",
     blockingReason: "Aucun",
-    reason: "Score OB/liquidité/tendance validé",
+    reason: "Structure + liquidite + OB/FVG + price action valides",
   };
 }
 
@@ -3649,12 +3735,12 @@ function buildSmartMoneyAnalysis(session, market, news, zones, confirmation, can
   const direction = scalpModel.direction;
   const setup = scalpModel.setup || buildSetup("WAIT", zones, confirmation, advancedSmc);
   const riskReward = setup.riskReward;
-  const score = direction === "BUY" ? scalpModel.buyScore : direction === "SELL" ? scalpModel.sellScore : Math.max(scalpModel.buyScore, scalpModel.sellScore);
+  const score = scalpModel.confidence;
   const finalValidation = getScalpingSignalValidation({ mode: "smart", direction, news, riskReward, score, scoreMinimum: state.scoreMinimums.smart, scalpModel, h1Direction });
   const rrBlocked = direction !== "WAIT" && !riskReward.valid;
   const valid = finalValidation.valid;
   const scoreLabel = score >= 90 ? "signal fort" : score >= 80 ? "bon signal" : score >= 70 ? "signal possible" : score >= 50 ? "attente" : "pas de trade";
-  const status = valid ? direction : finalValidation.statusKind === "refusé" ? "SIGNAL REFUSÉ" : finalValidation.setupState === "Aucun trade qualifié" ? "AUCUN TRADE" : "ATTENTE";
+  const status = valid ? direction : finalValidation.statusKind === "refusé" ? "SIGNAL REFUSÉ" : "WAIT";
   const reasonLines = scalpModel.reasons.length ? scalpModel.reasons : [finalValidation.reason];
   const entryLabel = setup.entryRange || setup.entry;
 
@@ -3667,22 +3753,20 @@ function buildSmartMoneyAnalysis(session, market, news, zones, confirmation, can
     setupState: valid ? "Setup complet" : finalValidation.setupState,
     score,
     scoreLabel,
-    biasLabel: `BUY ${scalpModel.buyScore}/100 · SELL ${scalpModel.sellScore}/100`,
+    biasLabel: `${scalpModel.smartChecklist.h1.label} · Confiance ${score}%`,
     setup,
     riskReward,
     timeframe: confirmation.timeframe,
     zone: scalpModel.bestBlock
       ? `OB ${scalpModel.bestBlock.timeframe} ${scalpModel.bestBlock.direction} ${scalpModel.bestBlock.state}`
-      : scalpModel.fallbackTrigger
-        ? "Zone scalping proche du prix actuel"
       : scalpModel.contextBlock
         ? `OB ${scalpModel.contextBlock.timeframe} ${scalpModel.contextBlock.direction} trop loin`
         : zones.primary,
-    liquidity: zones.targetLiquidity,
-    h1Direction: h1Direction.label,
+    liquidity: scalpModel.smartChecklist.liquidityReview.reason,
+    h1Direction: scalpModel.smartChecklist.h1.label,
     signalLifecycleStatus: valid ? "actif" : finalValidation.statusKind,
     blockingReason: valid ? "Aucun" : finalValidation.blockingReason,
-    confirmationSummary: `${scalpModel.summary} | ${advancedSmc.summary}`,
+    confirmationSummary: `${scalpModel.smartChecklist.checks.map((check) => `${check.key}:${check.valid ? "OK" : "WAIT"}`).join(" · ")}`,
     reason: valid
       ? `${direction} confirmé · Entrée ${entryLabel} · SL ${setup.sl} · TP1 ${setup.tp1} · TP2 ${setup.tp2} · TP3 ${setup.tp3}. Raison : ${reasonLines.join(" · ")}`
       : finalValidation.reason,
@@ -3691,22 +3775,16 @@ function buildSmartMoneyAnalysis(session, market, news, zones, confirmation, can
     scalpingModel: scalpModel,
     badges: buildSmartBadges(market, news, valid, candleScan, riskReward, rrBlocked, advancedSmc, scalpModel),
     blocks: [
-      ["BUY Score", scalpModel.buyScore >= state.scoreMinimums.smart && direction === "BUY", `${scalpModel.buyScore}/100 · seuil ${state.scoreMinimums.smart}`],
-      ["SELL Score", scalpModel.sellScore >= state.scoreMinimums.smart && direction === "SELL", `${scalpModel.sellScore}/100 · seuil ${state.scoreMinimums.smart}`],
-      ["Order Blocks actifs", scalpModel.activeOrderBlocks.length > 0, scalpModel.activeOrderBlocks.slice(0, 4).map((block) => `${block.timeframe} ${block.direction} ${block.state}`).join(", ") || "aucun"],
-      ["Tendance HH/HL - LH/LL", scalpModel.structureTrend.bias !== "WAIT", `${scalpModel.structureTrend.label} · ${scalpModel.structureTrend.reason}`],
-      ["Liquidité", scalpModel.warnings.length > 0 || zones.liquidityTaken, scalpModel.warnings.join(" · ") || zones.reason],
-      ["BOS displacement", advancedSmc.bosDisplacement, advancedSmc.bosDisplacement ? "valide" : "faible"],
-      ["FVG / Imbalance", advancedSmc.fvgPresent, advancedSmc.fvgPresent ? "present apres BOS" : "absent"],
-      ["Premium/Discount", advancedSmc.premiumDiscountAligned, advancedSmc.premiumDiscountLabel],
-      ["OTE 0.618-0.79", advancedSmc.oteTouched || advancedSmc.oteNear, `${advancedSmc.oteStatus} - 0.705 ${advancedSmc.ote705}`],
-      ["SL/TP structurels", Boolean(setup.structural), setup.structural ? `SL ${setup.sl} - TP1 ${setup.tp1} - TP2 ${setup.tp2} - TP3 ${setup.tp3}` : "Niveaux calcules par defaut"],
-      ["Confirmation d'entrée", confirmation.choch || confirmation.candleClose, confirmation.reason],
-      ["Score minimum", score >= state.scoreMinimums.smart, `${score}/100 · minimum ${state.scoreMinimums.smart}`],
-      ["Direction H1", h1Direction.bias === "WAIT" || h1Direction.bias === direction, h1Direction.label],
+      ["Direction H1", scalpModel.smartChecklist.candidateDirection !== "WAIT", scalpModel.smartChecklist.h1.label],
+      ["Structure marché", scalpModel.smartChecklist.checks.find((check) => check.key === "structure")?.valid, scalpModel.smartChecklist.checks.find((check) => check.key === "structure")?.reason],
+      ["OB actif", Boolean(scalpModel.bestBlock), scalpModel.bestBlock ? `OB ${scalpModel.bestBlock.timeframe} ${scalpModel.bestBlock.direction} propre` : scalpModel.smartChecklist.waitReason],
+      ["Liquidité détectée", scalpModel.smartChecklist.liquidityReview.valid, scalpModel.smartChecklist.liquidityReview.reason],
+      ["BOS / CHoCH", scalpModel.smartChecklist.bosChoch, scalpModel.smartChecklist.bosChoch ? "Confirmé" : "Non confirmé"],
+      ["Zone d'entrée", scalpModel.smartChecklist.retest.valid, scalpModel.smartChecklist.retest.reason],
+      ["Signal final", valid, valid ? `${direction} · confiance ${score}%` : `WAIT · ${finalValidation.reason}`],
+      ["Confiance", score >= 50, `${score}%`],
       ["Risk/Reward minimum", direction === "WAIT" || riskReward.valid, direction !== "WAIT" ? `${riskReward.display} · ${riskReward.classification} · minimum ${formatRiskRewardValue(state.riskRewardMinimum)}` : "Calculé après validation structure"],
-      ["Candle Scanner", candleScan.valid, `${candleScan.quality}/100 · ${candleScan.summary}`],
-      ["News économiques", news.valid, news.reason],
+      ["RSI filtre", scalpModel.smartChecklist.rsiFilterOk, scalpModel.smartChecklist.checks.find((check) => check.key === "rsi")?.reason],
     ],
   };
 }
@@ -4254,6 +4332,7 @@ function getManualDirectionLabel(status) {
   if (status === "SELL") return "🔴 SELL";
   if (status === "SIGNAL REFUSÉ") return "SIGNAL REFUSÉ";
   if (status === "AUCUN TRADE") return "AUCUN TRADE";
+  if (status === "WAIT") return "WAIT";
   return "ATTENTE";
 }
 
