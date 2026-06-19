@@ -199,6 +199,15 @@ const elements = {
   scoreValue: document.getElementById("scoreValue"),
   compareResults: document.getElementById("compareResults"),
   tsrAnalysisList: document.getElementById("tsrAnalysisList"),
+  quickTsrAnalyze: document.getElementById("quickTsrAnalyze"),
+  quickTsrPanel: document.getElementById("quickTsrPanel"),
+  quickTsrDecision: document.getElementById("quickTsrDecision"),
+  quickTsrEntry: document.getElementById("quickTsrEntry"),
+  quickTsrSl: document.getElementById("quickTsrSl"),
+  quickTsrTp1: document.getElementById("quickTsrTp1"),
+  quickTsrTp2: document.getElementById("quickTsrTp2"),
+  quickTsrTp3: document.getElementById("quickTsrTp3"),
+  quickTsrReasons: document.getElementById("quickTsrReasons"),
   entryPrice: document.getElementById("entryPrice"),
   stopLoss: document.getElementById("stopLoss"),
   tp1: document.getElementById("tp1"),
@@ -381,6 +390,8 @@ function bindInteractions() {
     state.showBothAnalyses = event.target.checked;
     evaluateAndRender();
   });
+
+  elements.quickTsrAnalyze?.addEventListener("click", runQuickTsrGoldAnalysis);
 
   if (elements.toggleReplay) {
     elements.toggleReplay.addEventListener("click", toggleReplayMode);
@@ -2676,6 +2687,255 @@ function evaluateAndRender() {
   renderCandleScanner(candleScan);
 }
 
+function runQuickTsrGoldAnalysis() {
+  if (!elements.quickTsrAnalyze) return;
+  elements.quickTsrAnalyze.disabled = true;
+  elements.quickTsrAnalyze.textContent = "Analyse en cours...";
+  renderQuickTsrAnalysis({
+    direction: "ATTENTE",
+    label: "⏳ ATTENTE",
+    entry: "--",
+    sl: "--",
+    tp1: "--",
+    tp2: "--",
+    tp3: "--",
+    reasons: ["Lecture des bougies visibles et des zones TSR en cours."],
+  });
+
+  window.setTimeout(() => {
+    requestQuickTsrBackendAnalysis()
+      .then((result) => {
+        renderQuickTsrAnalysis(result);
+      })
+      .finally(() => {
+        elements.quickTsrAnalyze.disabled = false;
+        elements.quickTsrAnalyze.textContent = "Analyse TSR maintenant";
+      });
+  }, 80);
+}
+
+async function requestQuickTsrBackendAnalysis() {
+  const candles = getLivePrecisionCandles();
+  if (candles.length < 30) return buildQuickTsrGoldDecision();
+
+  try {
+    const response = await fetch("/api/quick-analysis", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify({
+        symbol: "XAUUSD",
+        timeframe: state.intervalLabel,
+        candles: candles.slice(-220),
+        visibleCandles: candles.slice(-PRICE_SCALE_VISIBLE_CANDLES),
+      }),
+    });
+    const data = await response.json().catch(() => null);
+    if (response.ok && data?.label && Array.isArray(data.reasons)) return data;
+  } catch {
+    // Static local preview has no Vercel Function; keep the button useful with the same local engine.
+  }
+
+  return buildQuickTsrGoldDecision();
+}
+
+function buildQuickTsrGoldDecision() {
+  const candles = getLivePrecisionCandles();
+  if (candles.length < 30) {
+    return {
+      direction: "ATTENTE",
+      label: "⏳ ATTENTE",
+      entry: "--",
+      sl: "--",
+      tp1: "--",
+      tp2: "--",
+      tp3: "--",
+      reasons: [
+        "Bougies OHLCV TSR indisponibles pour l'analyse rapide.",
+        "TradingView reste visible, mais son widget officiel ne fournit pas directement les bougies au navigateur.",
+        "Verifier /history ou le tunnel TSR Data API avant de trader sur ce panneau.",
+      ],
+    };
+  }
+
+  const last = candles[candles.length - 1];
+  const market = getMarketWeather(candles);
+  const zones = getKeyZones(market, candles);
+  const candleScan = buildCandleScan(candles, market.bias);
+  const confirmation = getEntryConfirmation(market, zones, candleScan);
+  const advancedSmc = buildAdvancedSmcContext(candles, market, zones, confirmation, candleScan);
+  const structureTrend = getStructureTrend(candles, market);
+  const orderBlocks = annotateScalpingOrderBlocks(detectMultiTimeframeOrderBlocks(candles, last), candles, last)
+    .filter((block) => isTradableScalpingOrderBlock(block));
+  const liquidity = detectLiquidityContext(candles, last);
+  const buyScore = scoreDiscretionarySide("BUY", {
+    orderBlocks,
+    liquidity,
+    structureTrend,
+    zones,
+    confirmation,
+    candleScan,
+    advancedSmc,
+    rsi: getRsiConfirmation("BUY", candles),
+  });
+  const sellScore = scoreDiscretionarySide("SELL", {
+    orderBlocks,
+    liquidity,
+    structureTrend,
+    zones,
+    confirmation,
+    candleScan,
+    advancedSmc,
+    rsi: getRsiConfirmation("SELL", candles),
+  });
+
+  const recent = candles.slice(-36);
+  const previous = candles.slice(-28, -1);
+  const high = Math.max(...recent.map((candle) => candle.high));
+  const low = Math.min(...recent.map((candle) => candle.low));
+  const range = Math.max(0.1, high - low);
+  const midpoint = low + range * 0.5;
+  const avgRange = average(recent.slice(0, -1).map((candle) => candle.high - candle.low));
+  const lastRange = Math.max(0.01, last.high - last.low);
+  const previousHigh = Math.max(...previous.map((candle) => candle.high));
+  const previousLow = Math.min(...previous.map((candle) => candle.low));
+  const currentScan = candleScan.current || scanCandle(candles, candles.length - 1);
+  const bullishReject = Boolean(currentScan?.detections?.bullishRejection || currentScan?.lowerWickRatio >= 0.42 && currentScan?.closePosition >= 0.55);
+  const bearishReject = Boolean(currentScan?.detections?.bearishRejection || currentScan?.upperWickRatio >= 0.42 && currentScan?.closePosition <= 0.45);
+  const bullishBreakout = last.close > previousHigh && currentScan?.closePosition >= 0.58;
+  const bearishBreakout = last.close < previousLow && currentScan?.closePosition <= 0.42;
+  const largeImpulse = avgRange > 0 && lastRange >= avgRange * 1.85;
+  const middleRange = Math.abs(last.close - midpoint) <= range * 0.16;
+  const buyBlocks = orderBlocks.filter((block) => block.direction === "BUY").sort((a, b) => getExecutionBlockRank(b) - getExecutionBlockRank(a));
+  const sellBlocks = orderBlocks.filter((block) => block.direction === "SELL").sort((a, b) => getExecutionBlockRank(b) - getExecutionBlockRank(a));
+  const buyBlock = buyBlocks[0] || null;
+  const sellBlock = sellBlocks[0] || null;
+  const nearBuyZone = Boolean(buyBlock && (buyBlock.executionNear || buyBlock.inside || buyBlock.reacted));
+  const nearSellZone = Boolean(sellBlock && (sellBlock.executionNear || sellBlock.inside || sellBlock.reacted));
+
+  if (largeImpulse && !nearBuyZone && !nearSellZone) {
+    return buildQuickWaitDecision("attendre retracement", [
+      "Prix trop loin apres une grosse bougie.",
+      `Derniere bougie ${formatDistance(lastRange)} pts contre moyenne ${formatDistance(avgRange)} pts.`,
+      "Attendre un retest OB/FVG ou une zone de liquidite proche.",
+    ]);
+  }
+
+  if (middleRange && Math.max(buyScore.total, sellScore.total) < 70 && !nearBuyZone && !nearSellZone) {
+    return buildQuickWaitDecision("prix au milieu du range", [
+      "Prix au milieu du range visible.",
+      "Aucun Order Block proche avec reaction claire.",
+      "Attendre un contact zone haute/basse ou un sweep.",
+    ]);
+  }
+
+  let direction = "ATTENTE";
+  let block = null;
+  const reasons = [];
+  if (nearSellZone && (bearishReject || sellScore.total >= 65)) {
+    direction = "SELL";
+    block = sellBlock;
+    reasons.push(`Prix dans un Order Block vendeur ${block.timeframe}`);
+    reasons.push(bearishReject ? "Rejet sur zone rouge / resistance" : "Score vendeur prioritaire");
+  } else if (nearBuyZone && (bullishReject || buyScore.total >= 65)) {
+    direction = "BUY";
+    block = buyBlock;
+    reasons.push(`Prix dans un Order Block acheteur ${block.timeframe}`);
+    reasons.push(bullishReject ? "Rejet sur zone verte / support" : "Score acheteur prioritaire");
+  } else if (bullishBreakout && buyScore.total >= 58) {
+    direction = "BUY";
+    block = buyBlock;
+    reasons.push("Resistance cassee et cloture au-dessus");
+  } else if (bearishBreakout && sellScore.total >= 58) {
+    direction = "SELL";
+    block = sellBlock;
+    reasons.push("Support casse et cloture en dessous");
+  } else if (sellScore.total >= 65 && sellScore.total >= buyScore.total + 6 && sellBlock) {
+    direction = "SELL";
+    block = sellBlock;
+    reasons.push(`Order Block vendeur ${block.timeframe} le plus proche`);
+  } else if (buyScore.total >= 65 && buyScore.total >= sellScore.total + 6 && buyBlock) {
+    direction = "BUY";
+    block = buyBlock;
+    reasons.push(`Order Block acheteur ${block.timeframe} le plus proche`);
+  }
+
+  if (direction !== "BUY" && direction !== "SELL") {
+    return buildQuickWaitDecision("configuration non propre", [
+      `BUY ${buyScore.total}/100 · SELL ${sellScore.total}/100.`,
+      structureTrend.bias === "WAIT" ? "Structure visible en range." : `Structure ${structureTrend.label.toLowerCase()}.`,
+      "Attendre rejet, cassure cloturee ou retest OB/FVG.",
+    ]);
+  }
+
+  const setup = block ? buildOrderBlockSetup(direction, block, last) : buildQuickBreakoutSetup(direction, last, range);
+  if (direction === "BUY") {
+    if (liquidity.sellSideSweep) reasons.push("Liquidite vendeuse balayee");
+    if (structureTrend.bias === "BUY") reasons.push("Structure M5/M1 haussiere");
+  } else {
+    if (liquidity.buySideSweep) reasons.push("Liquidite acheteuse balayee");
+    if (structureTrend.bias === "SELL") reasons.push("Structure M5/M1 baissiere");
+  }
+  if (advancedSmc.fvgPresent || zones.fvgPresent) reasons.push("FVG / imbalance en confluence");
+
+  return {
+    direction,
+    label: direction === "BUY" ? "🟢 BUY" : "🔴 SELL",
+    entry: setup.entryRange || setup.entry,
+    sl: setup.sl,
+    tp1: setup.tp1,
+    tp2: setup.tp2,
+    tp3: setup.tp3,
+    reasons: uniqueList(reasons).slice(0, 3),
+  };
+}
+
+function buildQuickWaitDecision(reason, reasons) {
+  return {
+    direction: "ATTENTE",
+    label: "⏳ ATTENTE",
+    entry: "--",
+    sl: "--",
+    tp1: "--",
+    tp2: "--",
+    tp3: "--",
+    reasons: [reason, ...reasons].filter(Boolean).slice(0, 3),
+  };
+}
+
+function buildQuickBreakoutSetup(direction, last, range) {
+  const sign = direction === "BUY" ? 1 : -1;
+  const risk = Math.max(1.2, range * 0.08, Math.abs(last.close - last.open) * 0.9);
+  const entryLow = direction === "BUY" ? last.close - risk * 0.25 : last.close - risk * 0.05;
+  const entryHigh = direction === "BUY" ? last.close + risk * 0.05 : last.close + risk * 0.25;
+  const entry = last.close;
+  const sl = entry - sign * risk;
+  return {
+    entry: formatPrice(entry),
+    entryRange: `${formatPrice(Math.min(entryLow, entryHigh))} - ${formatPrice(Math.max(entryLow, entryHigh))}`,
+    sl: formatPrice(sl),
+    tp1: formatPrice(entry + sign * risk * 1.25),
+    tp2: formatPrice(entry + sign * risk * 1.85),
+    tp3: formatPrice(entry + sign * risk * 2.55),
+  };
+}
+
+function renderQuickTsrAnalysis(result) {
+  if (!elements.quickTsrDecision) return;
+  elements.quickTsrPanel?.classList.toggle("buy", result.direction === "BUY");
+  elements.quickTsrPanel?.classList.toggle("sell", result.direction === "SELL");
+  elements.quickTsrPanel?.classList.toggle("waiting", result.direction !== "BUY" && result.direction !== "SELL");
+  elements.quickTsrDecision.textContent = result.label;
+  elements.quickTsrEntry.textContent = result.entry;
+  elements.quickTsrSl.textContent = result.sl;
+  elements.quickTsrTp1.textContent = result.tp1;
+  elements.quickTsrTp2.textContent = result.tp2;
+  elements.quickTsrTp3.textContent = result.tp3;
+  elements.quickTsrReasons.innerHTML = result.reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("");
+}
+
 function getLivePrecisionCandles() {
   const apiCandles = normalizeApiCandles(extractCandles({ candles: state.api.history }));
   if (apiCandles.length >= 30) return apiCandles.slice(-220);
@@ -4696,6 +4956,15 @@ function renderStrategyOverlay(direction, zones, confirmation, entryProjection) 
 
 function clearStrategyOverlay() {
   elements.strategyOverlay.innerHTML = "";
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function renderTsrAnalysisPanel(topDownAnalysis = { zones: [] }) {

@@ -220,6 +220,26 @@
             </button>
           </div>
 
+          <button type="button" class="quick-analysis-button" id="quickTsrAnalyze">
+            Analyse TSR maintenant
+          </button>
+
+          <section class="quick-analysis-card" id="quickTsrPanel" aria-live="polite">
+            <span class="quick-analysis-kicker">Analyse rapide TSR Gold</span>
+            <h3 id="quickTsrDecision">⏳ ATTENTE</h3>
+            <dl class="quick-analysis-levels">
+              <div><dt>EntrÃ©e</dt><dd id="quickTsrEntry">--</dd></div>
+              <div><dt>SL</dt><dd id="quickTsrSl">--</dd></div>
+              <div><dt>TP1</dt><dd id="quickTsrTp1">--</dd></div>
+              <div><dt>TP2</dt><dd id="quickTsrTp2">--</dd></div>
+              <div><dt>TP3</dt><dd id="quickTsrTp3">--</dd></div>
+            </dl>
+            <strong class="quick-analysis-reason-title">Raison :</strong>
+            <ul id="quickTsrReasons">
+              <li>Clique sur “Analyse TSR maintenant”.</li>
+            </ul>
+          </section>
+
           <section class="signal-card" id="signalCard">
             <span class="setup-state" id="setupState">Setup incomplet</span>
             <small class="active-mode-label" id="activeModeLabel">TSR Smart Money</small>

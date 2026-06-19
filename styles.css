@@ -224,6 +224,100 @@ button:active {
   margin: 13px;
 }
 
+.quick-analysis-button {
+  width: calc(100% - 26px);
+  min-height: 40px;
+  margin: 13px 13px 0;
+  border-color: rgba(231, 184, 78, 0.68);
+  background: linear-gradient(135deg, rgba(231, 184, 78, 0.2), rgba(48, 218, 191, 0.09));
+  color: var(--gold);
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.quick-analysis-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.quick-analysis-card {
+  display: grid;
+  gap: 10px;
+  margin: 10px 13px 13px;
+  padding: 13px;
+  border: 1px solid rgba(231, 184, 78, 0.38);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.quick-analysis-card.buy {
+  border-color: rgba(70, 209, 123, 0.48);
+  background: linear-gradient(135deg, rgba(70, 209, 123, 0.1), rgba(255, 255, 255, 0.018));
+}
+
+.quick-analysis-card.sell {
+  border-color: rgba(239, 98, 98, 0.5);
+  background: linear-gradient(135deg, rgba(239, 98, 98, 0.1), rgba(255, 255, 255, 0.018));
+}
+
+.quick-analysis-kicker,
+.quick-analysis-reason-title {
+  color: var(--gold);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.quick-analysis-card h3 {
+  margin: 0;
+  color: var(--gold);
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.quick-analysis-card.buy h3 {
+  color: var(--green);
+}
+
+.quick-analysis-card.sell h3 {
+  color: var(--red);
+}
+
+.quick-analysis-levels {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.quick-analysis-levels div {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.quick-analysis-levels dt {
+  color: var(--muted);
+  font-size: 0.76rem;
+  text-transform: uppercase;
+}
+
+.quick-analysis-levels dd {
+  margin: 0;
+  color: #f0eadc;
+  font-weight: 800;
+}
+
+.quick-analysis-card ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: #ded7c7;
+  line-height: 1.35;
+}
+
 .timeframe-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
