@@ -93,44 +93,6 @@
             </label>
           </section>
 
-          <section class="replay-controls" aria-label="Mode Replay">
-            <div class="replay-head">
-              <h3>Mode Replay</h3>
-              <button type="button" id="toggleReplay">Activer</button>
-            </div>
-            <label>
-              <span>Date</span>
-              <input type="date" id="replayDate" />
-            </label>
-            <label>
-              <span>Timeframe</span>
-              <select id="replayTimeframe">
-                <option value="240">H4</option>
-                <option value="60">H1</option>
-                <option value="30">M30</option>
-                <option value="15">M15</option>
-                <option value="5">M5</option>
-                <option value="1">M1</option>
-                <option value="30S">30s</option>
-              </select>
-            </label>
-            <div class="replay-actions">
-              <button type="button" id="replayBack" title="Reculer d'une bougie">◀</button>
-              <button type="button" id="replayPlay">Play</button>
-              <button type="button" id="replayNext" title="Avancer d'une bougie">▶</button>
-            </div>
-            <label>
-              <span>Vitesse</span>
-              <select id="replaySpeed">
-                <option value="1">x1</option>
-                <option value="2">x2</option>
-                <option value="5">x5</option>
-                <option value="10">x10</option>
-              </select>
-            </label>
-            <p id="replayStatus">Replay désactivé</p>
-          </section>
-
           <label class="range-control">
             <span>Taille graphique</span>
             <input id="chartScale" type="range" min="48" max="76" value="61" />
@@ -386,10 +348,6 @@
             <div id="scenarioList" class="scenario-list"></div>
           </section>
 
-          <section class="analysis-block">
-            <h2>Journal de replay</h2>
-            <div id="replayJournal" class="replay-journal"></div>
-          </section>
         </aside>
       </section>
     </main>

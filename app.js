@@ -42,8 +42,8 @@ const PRICE_AUTO_FIT_STORAGE_KEY = "tsr-price-auto-fit-visible-candles";
 const RISK_REWARD_DEFAULT_MINIMUM = 1.2;
 const SMART_SCORE_DEFAULT_MINIMUM = 65;
 const GOLD_SCORE_DEFAULT_MINIMUM = 75;
-const PRICE_SCALE_VISIBLE_CANDLES = 72;
-const PRICE_SCALE_MARGIN_RATIO = 0.12;
+const PRICE_SCALE_VISIBLE_CANDLES = 56;
+const PRICE_SCALE_MARGIN_RATIO = 0.1;
 const TOP_DOWN_TIMEFRAMES = [
   { label: "Mensuel", group: 180, weight: 24, role: "historique large" },
   { label: "Weekly", group: 132, weight: 22, role: "liquidite majeure" },
@@ -217,7 +217,7 @@ const elements = {
 };
 
 function boot() {
-  initReplayDefaults();
+  if (elements.replayDate) initReplayDefaults();
   initRiskRewardMinimum();
   initScoreMinimums();
   initPriceAutoFit();
@@ -349,23 +349,25 @@ function bindInteractions() {
     evaluateAndRender();
   });
 
-  elements.toggleReplay.addEventListener("click", toggleReplayMode);
-  elements.replayDate.addEventListener("change", resetReplaySession);
-  elements.replayTimeframe.addEventListener("change", () => {
-    state.replay.timeframe = elements.replayTimeframe.value;
-    state.interval = state.replay.timeframe;
-    state.intervalLabel = getReplayTimeframeLabel(state.replay.timeframe);
-    state.forceRecentPriceCenter += 1;
-    elements.chartInterval.textContent = state.intervalLabel;
-    resetReplaySession();
-  });
-  elements.replayBack.addEventListener("click", () => stepReplay(-1));
-  elements.replayNext.addEventListener("click", () => stepReplay(1));
-  elements.replayPlay.addEventListener("click", toggleReplayPlayback);
-  elements.replaySpeed.addEventListener("change", () => {
-    state.replay.speed = Number(elements.replaySpeed.value);
-    restartReplayTimer();
-  });
+  if (elements.toggleReplay) {
+    elements.toggleReplay.addEventListener("click", toggleReplayMode);
+    elements.replayDate.addEventListener("change", resetReplaySession);
+    elements.replayTimeframe.addEventListener("change", () => {
+      state.replay.timeframe = elements.replayTimeframe.value;
+      state.interval = state.replay.timeframe;
+      state.intervalLabel = getReplayTimeframeLabel(state.replay.timeframe);
+      state.forceRecentPriceCenter += 1;
+      elements.chartInterval.textContent = state.intervalLabel;
+      resetReplaySession();
+    });
+    elements.replayBack.addEventListener("click", () => stepReplay(-1));
+    elements.replayNext.addEventListener("click", () => stepReplay(1));
+    elements.replayPlay.addEventListener("click", toggleReplayPlayback);
+    elements.replaySpeed.addEventListener("change", () => {
+      state.replay.speed = Number(elements.replaySpeed.value);
+      restartReplayTimer();
+    });
+  }
 
   document.querySelectorAll("[data-smart-overlay]").forEach((input) => {
     input.addEventListener("change", () => {
@@ -728,7 +730,7 @@ async function loadMarketFallbackHistory(reason = "") {
     state.api.history = candles;
     state.api.historySource = "market-fallback";
     markMarketFlowUpdate(candles);
-    elements.apiNotice.textContent = `${reason ? `${reason} ` : ""}TradingView visible + analyse TSR active via flux OHLCV fallback ${data.sourceSymbol || "GC=F"}.`;
+    elements.apiNotice.textContent = `${reason ? `${reason} ` : ""}Graphique TSR auto-fit actif via flux OHLCV fallback ${data.sourceSymbol || "GC=F"}.`;
     elements.apiNotice.hidden = false;
     return state.api.history;
   } catch {
@@ -863,6 +865,7 @@ function normalizeApiCandles(candles) {
 }
 
 function initReplayDefaults() {
+  if (!elements.replayDate || !elements.replayTimeframe) return;
   const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const date = yesterday.toISOString().slice(0, 10);
   state.replay.date = date;
@@ -872,11 +875,13 @@ function initReplayDefaults() {
 }
 
 function toggleReplayMode() {
+  const replayControls = document.querySelector(".replay-controls");
+  if (!replayControls || !elements.toggleReplay) return;
   state.replay.active = !state.replay.active;
   state.replay.playing = false;
   stopReplayTimer();
   elements.chartFrame.classList.toggle("replay-active", state.replay.active);
-  document.querySelector(".replay-controls").classList.toggle("active", state.replay.active);
+  replayControls.classList.toggle("active", state.replay.active);
   elements.toggleReplay.textContent = state.replay.active ? "Désactiver" : "Activer";
   elements.replayPlay.textContent = "Play";
 
@@ -1829,7 +1834,34 @@ function drawReplayOverlays(ctx, rect, context, activeResult, geometry, entryPro
 function drawTopDownZones(ctx, rect, geometry, zones) {
   state.chartZoneHitboxes = [];
   const previewZone = getActiveChartPreviewZone(zones);
-  if (previewZone) drawTopDownZone(ctx, rect, geometry, previewZone);
+  const drawable = zones
+    .filter((zone) => shouldDrawQualifiedTsrZone(zone, previewZone))
+    .sort((a, b) => {
+      if (previewZone?.id === a.id) return -1;
+      if (previewZone?.id === b.id) return 1;
+      return b.score - a.score;
+    })
+    .slice(0, 10);
+  drawable.forEach((zone) => drawTopDownZone(ctx, rect, geometry, zone));
+}
+
+function shouldDrawQualifiedTsrZone(zone, previewZone) {
+  if (previewZone?.id === zone.id) return true;
+  if (zone.status === "invalidée") return false;
+  const visible = state.smartMoneyVisibility;
+  const typeVisible = zone.type === "OB"
+    ? visible.orderBlocks
+    : zone.type === "FVG"
+      ? visible.fvg
+      : zone.type === "OTE"
+        ? visible.ote || visible.premiumDiscount
+        : visible.equalHigh || visible.equalLow || visible.liquiditySweep || visible.previousHL;
+  if (!typeVisible) return false;
+  if (zone.status === "signal confirmé") return visible.confirmedSignals;
+  if (zone.status === "entrée imminente") return visible.imminentEntries;
+  if (zone.status === "entrée potentielle") return visible.potentialEntries && zone.score >= 65;
+  if (zone.status === "zone future") return (visible.futureZones || visible.entryZones) && zone.score >= 75 && (zone.type === "OB" || zone.type === "Liquidite");
+  return false;
 }
 
 function getActiveChartPreviewZone(zones) {
@@ -2188,6 +2220,7 @@ function updateOpenReplayResults(visibleCandles) {
 }
 
 function renderReplayJournal() {
+  if (!elements.replayJournal) return;
   if (!state.replay.journal.length) {
     elements.replayJournal.innerHTML = '<p class="journal-empty">Aucun signal replay pour le moment.</p>';
     return;
@@ -2576,16 +2609,20 @@ function getLivePrecisionCandles() {
 
 function renderLivePrecisionChart(candles, context, activeResult, entryProjection) {
   if (state.replay.active) return;
-  elements.chartFrame.classList.remove("tv-fallback-active");
-  ensureTradingViewInterval();
   if (!candles.length) {
+    elements.chartFrame.classList.remove("tsr-live-active");
+    elements.chartFrame.classList.add("tv-fallback-active");
+    ensureTradingViewInterval();
     clearTsrOverlayCanvas();
     return;
   }
-  drawLiveTsrOverlay(candles, context, activeResult, entryProjection);
+  elements.chartFrame.classList.remove("tv-fallback-active");
+  elements.chartFrame.classList.add("tsr-live-active");
+  drawReplayChart(candles, context, activeResult, entryProjection);
 }
 
 function renderNoLiveCandlesState(session, market, news, zones) {
+  elements.chartFrame.classList.remove("tsr-live-active");
   elements.chartFrame.classList.add("tv-fallback-active");
   ensureTradingViewInterval();
   clearTsrOverlayCanvas();
