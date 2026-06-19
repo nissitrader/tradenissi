@@ -46,6 +46,8 @@ const PRICE_SCALE_VISIBLE_CANDLES = 56;
 const PRICE_SCALE_MARGIN_RATIO = 0.1;
 const LIVE_TSR_ZONE_DISTANCE_RATIO = 0.22;
 const LIVE_TSR_ZONE_LIMIT = 5;
+const SCALPING_EXECUTION_DISTANCE_CAP = 12;
+const SCALPING_EXECUTION_DISTANCE_RATIO = 0.2;
 const TOP_DOWN_TIMEFRAMES = [
   { label: "Mensuel", group: 180, weight: 24, role: "historique large" },
   { label: "Weekly", group: 132, weight: 22, role: "liquidite majeure" },
@@ -3005,7 +3007,7 @@ function buildScalpingDecisionModel(candles, market, zones, confirmation, candle
   const usable = candles.filter((candle) => [candle.open, candle.high, candle.low, candle.close].every(Number.isFinite));
   const last = usable[usable.length - 1] || candleScan.current;
   const structureTrend = getStructureTrend(usable, market);
-  const orderBlocks = detectMultiTimeframeOrderBlocks(usable, last);
+  const orderBlocks = annotateScalpingOrderBlocks(detectMultiTimeframeOrderBlocks(usable, last), usable, last);
   const liquidity = detectLiquidityContext(usable, last);
   const buyRsi = getRsiConfirmation("BUY", usable);
   const sellRsi = getRsiConfirmation("SELL", usable);
@@ -3017,9 +3019,10 @@ function buildScalpingDecisionModel(candles, market, zones, confirmation, candle
     direction = buyScore.total >= sellScore.total ? "BUY" : "SELL";
   }
   const activeBlocks = orderBlocks.filter((block) => block.state === "Active");
-  const bestBlock = direction === "WAIT"
-    ? activeBlocks.sort((a, b) => b.score - a.score)[0] || null
-    : activeBlocks.filter((block) => block.direction === direction).sort((a, b) => b.score - a.score)[0] || null;
+  const directionalBlocks = direction === "WAIT" ? activeBlocks : activeBlocks.filter((block) => block.direction === direction);
+  const executionBlocks = directionalBlocks.filter((block) => block.executionNear);
+  const contextBlock = directionalBlocks.sort((a, b) => b.score - a.score)[0] || null;
+  const bestBlock = executionBlocks.sort((a, b) => getExecutionBlockRank(b) - getExecutionBlockRank(a))[0] || null;
   const reasons = direction === "BUY" ? buyScore.reasons : direction === "SELL" ? sellScore.reasons : [...buyScore.reasons, ...sellScore.reasons].slice(0, 4);
 
   return {
@@ -3035,6 +3038,8 @@ function buildScalpingDecisionModel(candles, market, zones, confirmation, candle
     orderBlocks,
     activeOrderBlocks: activeBlocks,
     bestBlock,
+    contextBlock,
+    executionDistanceLimit: getScalpingExecutionDistanceLimit(usable, last),
     liquidity,
     setup: bestBlock && direction !== "WAIT" ? buildOrderBlockSetup(direction, bestBlock, last) : null,
     summary: `BUY ${buyScore.total}/100 · SELL ${sellScore.total}/100 · tendance ${structureTrend.label}`,
@@ -3053,6 +3058,56 @@ function detectMultiTimeframeOrderBlocks(candles, last) {
     });
   });
   return blocks.sort((a, b) => b.score - a.score);
+}
+
+function annotateScalpingOrderBlocks(blocks, candles, last) {
+  const limit = getScalpingExecutionDistanceLimit(candles, last);
+  const currentPrice = Number(last?.close);
+  return blocks.map((block) => {
+    const distance = getZoneDistanceToPrice(block, currentPrice);
+    const executionNear = block.inside || block.reacted || distance <= limit;
+    const executionScore = clamp(
+      block.score
+      + (executionNear ? 24 : -18)
+      + (block.reacted ? 12 : 0)
+      + (block.inside ? 10 : 0)
+      - Math.round(Math.max(0, distance - limit) * 1.6),
+      0,
+      100,
+    );
+    return {
+      ...block,
+      distanceToPrice: distance,
+      executionNear,
+      executionScore,
+      executionDistanceLimit: limit,
+    };
+  });
+}
+
+function getScalpingExecutionDistanceLimit(candles, last) {
+  const usable = candles.filter((candle) => [candle.high, candle.low].every(Number.isFinite));
+  const recent = usable.slice(-36);
+  const recentRange = recent.length
+    ? Math.max(...recent.map((candle) => candle.high)) - Math.min(...recent.map((candle) => candle.low))
+    : 0;
+  const price = Math.abs(Number(last?.close) || 0);
+  const rawLimit = Math.max(2.5, recentRange * SCALPING_EXECUTION_DISTANCE_RATIO, price * 0.0008);
+  return Math.min(SCALPING_EXECUTION_DISTANCE_CAP, rawLimit);
+}
+
+function getZoneDistanceToPrice(zone, price) {
+  if (!Number.isFinite(price)) return Infinity;
+  const top = Math.max(zone.top, zone.bottom);
+  const bottom = Math.min(zone.top, zone.bottom);
+  if (price >= bottom && price <= top) return 0;
+  return price > top ? price - top : bottom - price;
+}
+
+function getExecutionBlockRank(block) {
+  const timeframeBonus = block.timeframe === "M1" ? 16 : block.timeframe === "M5" ? 14 : block.timeframe === "M15" ? 12 : block.timeframe === "H1" ? 8 : 4;
+  const distancePenalty = Math.round((block.distanceToPrice || 0) * 2);
+  return (block.executionScore || block.score || 0) + timeframeBonus - distancePenalty;
 }
 
 function findOrderBlockCandidate(segment, startIndex, timeframe, direction, last) {
@@ -3161,7 +3216,8 @@ function scoreDiscretionarySide(direction, context) {
   const h1Block = blocks.find((block) => block.timeframe === "H1");
   const m15Block = blocks.find((block) => block.timeframe === "M15");
   const scalpBlock = blocks.find((block) => block.timeframe === "M5" || block.timeframe === "M1");
-  const reactiveBlock = blocks.find((block) => block.reacted || block.inside || block.near);
+  const executionBlock = blocks.find((block) => block.executionNear);
+  const reactiveBlock = blocks.find((block) => block.reacted || block.inside || block.executionNear);
 
   if (htfBlock) {
     total += 25;
@@ -3182,6 +3238,10 @@ function scoreDiscretionarySide(direction, context) {
   if (reactiveBlock) {
     total += reactiveBlock.reacted ? 22 : reactiveBlock.inside ? 18 : 12;
     reasons.push(`Réaction sur OB ${reactiveBlock.timeframe}`);
+  }
+  if (!executionBlock) {
+    total -= 18;
+    reasons.push("Aucune zone d'entrée proche du prix actuel");
   }
 
   if (structureTrend.bias === direction) {
@@ -3440,7 +3500,12 @@ function getScalpingSignalValidation({ mode, direction, news, riskReward, score,
     return buildValidationFailure("Aucun trade qualifié", `ATTENTE · BUY ${scalpModel.buyScore}/100 · SELL ${scalpModel.sellScore}/100 · seuil ${scoreMinimum}`, "en attente");
   }
   if (!news.valid) return buildValidationFailure("Setup incomplet", news.reason, "en attente");
-  if (!scalpModel.bestBlock) return buildValidationFailure("Setup incomplet", "Aucun Order Block actif prioritaire", "en attente");
+  if (!scalpModel.bestBlock) {
+    const context = scalpModel.contextBlock
+      ? `OB ${scalpModel.contextBlock.timeframe} détecté mais trop loin du prix actuel (${formatDistance(scalpModel.contextBlock.distanceToPrice)} pts > ${formatDistance(scalpModel.executionDistanceLimit)} pts)`
+      : "Aucun Order Block actif proche du prix actuel";
+    return buildValidationFailure("Entrée trop loin", context, "en attente");
+  }
   if (mode === "gold" && h1Direction?.bias && h1Direction.bias !== "WAIT" && h1Direction.bias !== direction) {
     return buildValidationFailure("Signal refusé", "Signal refusé : contre tendance H1", "refusé");
   }
@@ -3464,7 +3529,7 @@ function buildSmartMoneyAnalysis(session, market, news, zones, confirmation, can
   const h1Direction = getH1Direction(market);
   const scalpModel = buildScalpingDecisionModel(candles, market, zones, confirmation, candleScan, advancedSmc);
   const direction = scalpModel.direction;
-  const setup = direction === "WAIT" ? buildSetup("WAIT", zones, confirmation, advancedSmc) : scalpModel.setup || buildSetup(direction, zones, confirmation, advancedSmc);
+  const setup = scalpModel.setup || buildSetup("WAIT", zones, confirmation, advancedSmc);
   const riskReward = setup.riskReward;
   const score = direction === "BUY" ? scalpModel.buyScore : direction === "SELL" ? scalpModel.sellScore : Math.max(scalpModel.buyScore, scalpModel.sellScore);
   const finalValidation = getScalpingSignalValidation({ mode: "smart", direction, news, riskReward, score, scoreMinimum: state.scoreMinimums.smart, scalpModel, h1Direction });
@@ -3488,7 +3553,11 @@ function buildSmartMoneyAnalysis(session, market, news, zones, confirmation, can
     setup,
     riskReward,
     timeframe: confirmation.timeframe,
-    zone: scalpModel.bestBlock ? `OB ${scalpModel.bestBlock.timeframe} ${scalpModel.bestBlock.direction} ${scalpModel.bestBlock.state}` : zones.primary,
+    zone: scalpModel.bestBlock
+      ? `OB ${scalpModel.bestBlock.timeframe} ${scalpModel.bestBlock.direction} ${scalpModel.bestBlock.state}`
+      : scalpModel.contextBlock
+        ? `OB ${scalpModel.contextBlock.timeframe} ${scalpModel.contextBlock.direction} trop loin`
+        : zones.primary,
     liquidity: zones.targetLiquidity,
     h1Direction: h1Direction.label,
     signalLifecycleStatus: valid ? "actif" : finalValidation.statusKind,
@@ -4069,6 +4138,12 @@ function getManualDirectionLabel(status) {
 }
 
 function getManualSignalReasons(activeResult) {
+  if (activeResult.status !== "BUY" && activeResult.status !== "SELL" && activeResult.blockingReason) {
+    const extraReasons = activeResult.scalpingModel?.reasons
+      ?.filter((item) => !/Order Block D1 actif|Order Block H4 actif/i.test(item))
+      .slice(0, 2) || [];
+    return [activeResult.blockingReason, ...extraReasons];
+  }
   if (activeResult.scalpingModel?.reasons?.length) return activeResult.scalpingModel.reasons;
   const reason = String(activeResult.reason || activeResult.blockingReason || "");
   const reasonOnly = reason.includes("Raison :") ? reason.split("Raison :").pop() : reason;
@@ -4078,6 +4153,10 @@ function getManualSignalReasons(activeResult) {
     .filter(Boolean)
     .filter((item) => !/^Entrée /i.test(item) && !/^SL /i.test(item) && !/^TP\d /i.test(item))
     .slice(0, 4);
+}
+
+function formatDistance(value) {
+  return Number.isFinite(value) ? value.toFixed(1) : "--";
 }
 
 function renderComparison(smartResult, goldResult) {
