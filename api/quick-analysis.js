@@ -283,6 +283,15 @@ function normalizeCandles(candles) {
 }
 
 function readJsonBody(request) {
+  if (request.body && typeof request.body === "object") return Promise.resolve(request.body);
+  if (typeof request.body === "string") {
+    try {
+      return Promise.resolve(request.body ? JSON.parse(request.body) : {});
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
   return new Promise((resolve, reject) => {
     let raw = "";
     request.on("data", (chunk) => {
