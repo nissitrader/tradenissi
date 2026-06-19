@@ -9,7 +9,7 @@ module.exports = async (request, response) => {
 
   try {
     const body = await readJsonBody(request).catch(() => ({}));
-    const candles = normalizeCandles(body?.candles || []).slice(-220);
+    const candles = normalizeCandles(Array.isArray(body?.candles) ? body.candles : []).slice(-220);
     if (candles.length < 30) {
       response.status(200).json(waitDecision([
         "Bougies OHLCV insuffisantes pour une analyse rapide.",
